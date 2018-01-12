@@ -5,7 +5,6 @@ use std::borrow::{Borrow, Cow};
 use std::collections::{BTreeMap, HashMap};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 
 #[derive(Clone, Debug)]
 pub enum Type {
@@ -114,7 +113,7 @@ enum Operation {
 }
 
 impl Operation {
-    fn hash_from_seed(&self, seed: u64) -> u64 {
+    fn hash_from_seed(&self, seed: &u64) -> u64 {
         let mut hasher = DefaultHasher::new();
         seed.hash(&mut hasher);
         self.hash(&mut hasher);
@@ -130,7 +129,7 @@ enum Values<'a> {
 }
 
 impl<'a> Values<'a> {
-    fn filter(&self, predicate: &Predicate) -> (Vec<usize>, Values) {
+    fn filter<'b>(&self, predicate: &Predicate) -> (Vec<usize>, Values<'b>) {
         match *self {
             Values::Boolean(ref values) => {
                 let filtered = values
@@ -179,6 +178,21 @@ impl<'a> Values<'a> {
             }
         }
     }
+
+    fn select_by_idx<'b>(&self, indices: &[usize]) -> Values<'b> {
+        match *self {
+            Values::Boolean(ref values) => {
+                let filtered = values
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| indices.contains(&k))
+                    .map(|(k, v)| v.clone())
+                    .collect::<Vec<bool>>();
+                Values::Boolean(Cow::from(filtered))
+            }
+            _ => unimplemented!(),
+        }
+    }
 }
 
 pub struct Pool<'a> {
@@ -203,7 +217,7 @@ impl<'a> Pool<'a> {
     }
 
     fn get_values(&self, idx: &u64) -> Option<Values> {
-        self.values.get(idx).map(|v| v.clone())
+        self.values.get(idx).cloned()
     }
 
     fn get_value(&self, col_idx: &u64, row_idx: &u64) -> Option<Value> {
@@ -219,6 +233,10 @@ impl<'a> Pool<'a> {
             }
             None => None,
         }
+    }
+
+    fn set_values(&mut self, idx: u64, values: Values<'a>) {
+        self.values.insert(idx, values);
     }
 
     fn set_initial_boolean_values(&mut self, values: Vec<bool>) -> u64 {
@@ -290,7 +308,7 @@ impl DataFrame {
         let operation = Operation::Filter(column_name.clone(), predicate);
         let indices = self.pool_indices
             .keys()
-            .map(|k| (k.clone(), operation.hash_from_seed(seed)))
+            .map(|k| (k.clone(), operation.hash_from_seed(&seed)))
             .collect();
         DataFrame {
             schema: self.schema.clone(),
@@ -351,21 +369,35 @@ impl DataFrame {
         }
     }
 
-    fn materialize(&self, pool: &mut Pool) {
+    fn materialize<'a>(&self, pool: &'a mut Pool<'a>) {
         match self.operation {
             Operation::Select(_) => {}
             Operation::Filter(ref filter_col_name, ref predicate) => {
                 let filter_col_idx = self.pool_indices.get(filter_col_name).expect(&format!(
-                    "Column missing: filter col => {}",
+                    "Column missing in pool_indices: filter col => {}",
                     filter_col_name
                 ));
-                let filter_col_values = pool.get_values(filter_col_idx);
-                let (fiter_pass_idxs, filtered_values) = filter_col_values.filter(predicate);
+
+                let (filter_pass_idxs, filtered_values) = pool.get_values(filter_col_idx)
+                    .expect(&format!(
+                        "Column missing in pool: filter col idx {}",
+                        filter_col_idx
+                    ))
+                    .filter(predicate);
+                pool.set_values(
+                    self.operation.hash_from_seed(filter_col_idx),
+                    filtered_values,
+                );
 
                 for (col_name, idx) in &self.pool_indices {
-                    // TODO: select rows from column where enumerate idx in filter_pass_idxs
+                    if col_name != filter_col_name {
+                        let new_idx = self.operation.hash_from_seed(idx);
+                        let values = pool.get_values(idx)
+                            .expect(&format!("Column missing in pool: {}", col_name))
+                            .select_by_idx(&filter_pass_idxs);
+                        pool.set_values(new_idx, values)
+                    }
                 }
-                // TODO: set values in pool
             }
             Operation::Aggregation(_) => unimplemented!(),
         }
