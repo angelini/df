@@ -4,4 +4,5 @@ version = "0.1.0"
 authors = ["Alex Angelini <alex.louis.angelini@gmail.com>"]
 
 [dependencies]
+clippy = "*"
 rand = "0.4.2"

@@ -1,10 +1,14 @@
+#![feature(plugin)]
+
+#![plugin(clippy)]
+
 extern crate rand;
 
 use rand::Rng;
-use std::borrow::{Borrow, Cow};
 use std::collections::{BTreeMap, HashMap};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 #[derive(Clone, Debug)]
 pub enum Type {
@@ -20,14 +24,38 @@ pub enum Value {
     String(String),
 }
 
-pub struct Row {
-    values: Vec<Value>,
-    types: Vec<Type>, // FIXME: Don't include on every row
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Value::Boolean(value)
+    }
 }
 
-#[derive(Clone)]
+impl From<u64> for Value {
+    fn from(value: u64) -> Self {
+        Value::Int(value)
+    }
+}
+
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Value::String(value)
+    }
+}
+
+#[derive(Debug)]
+pub struct Row {
+    values: Vec<Value>,
+}
+
+#[derive(Clone, Debug)]
 struct Column {
     type_: Type,
+}
+
+impl Column {
+    fn new(type_: &Type) -> Column {
+        Column { type_: type_.clone() }
+    }
 }
 
 #[derive(Clone)]
@@ -36,11 +64,19 @@ pub struct Schema {
 }
 
 impl Schema {
-    fn select(&self, column_names: &[String]) -> Schema {
+    fn new(names: &[&str], types: &[Type]) -> Schema {
+        let mut columns = BTreeMap::new();
+        for (idx, name) in names.iter().enumerate() {
+            columns.insert(name.to_string(), Column::new(&types[idx]));
+        }
+        Schema { columns }
+    }
+
+    fn select(&self, column_names: &[&str]) -> Schema {
         Schema {
             columns: self.columns
                 .iter()
-                .filter(|&(k, _)| column_names.contains(&k))
+                .filter(|&(k, _)| column_names.contains(&k.as_str()))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
         }
@@ -83,6 +119,10 @@ pub struct Predicate {
 }
 
 impl Predicate {
+    fn new(comparator: Comparator, value: Value) -> Predicate {
+        Predicate { comparator, value }
+    }
+
     fn boolean_pass(&self, other: &bool) -> bool {
         match self.value {
             Value::Boolean(value) => self.comparator.pass(&value, other),
@@ -97,6 +137,7 @@ impl Predicate {
         }
     }
 
+    #[allow(ptr_arg)]
     fn string_pass(&self, other: &String) -> bool {
         match self.value {
             Value::String(ref value) => self.comparator.pass(value, other),
@@ -113,34 +154,35 @@ enum Operation {
 }
 
 impl Operation {
-    fn hash_from_seed(&self, seed: &u64) -> u64 {
+    fn hash_from_seed(&self, seed: &u64, col_name: &str) -> u64 {
         let mut hasher = DefaultHasher::new();
         seed.hash(&mut hasher);
+        col_name.hash(&mut hasher);
         self.hash(&mut hasher);
         hasher.finish()
     }
 }
 
-#[derive(Clone)]
-enum Values<'a> {
-    Boolean(Cow<'a, [bool]>),
-    Int(Cow<'a, [u64]>),
-    String(Cow<'a, [String]>),
+#[derive(Clone, Debug)]
+enum Values {
+    Boolean(Rc<Vec<bool>>),
+    Int(Rc<Vec<u64>>),
+    String(Rc<Vec<String>>),
 }
 
-impl<'a> Values<'a> {
-    fn filter<'b>(&self, predicate: &Predicate) -> (Vec<usize>, Values<'b>) {
+impl Values {
+    fn filter(&self, predicate: &Predicate) -> (Vec<usize>, Values) {
         match *self {
             Values::Boolean(ref values) => {
                 let filtered = values
                     .iter()
                     .enumerate()
                     .filter(|&(_, v)| predicate.boolean_pass(v))
-                    .map(|(k, v)| (k, v.clone()))
+                    .map(|(k, v)| (k, *v))
                     .collect::<Vec<(usize, bool)>>();
                 (
                     filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::Boolean(Cow::from(
+                    Values::Boolean(Rc::from(
                         filtered.into_iter().map(|(_, v)| v).collect::<Vec<bool>>(),
                     )),
                 )
@@ -150,11 +192,11 @@ impl<'a> Values<'a> {
                     .iter()
                     .enumerate()
                     .filter(|&(_, v)| predicate.int_pass(v))
-                    .map(|(k, v)| (k, v.clone()))
+                    .map(|(k, v)| (k, *v))
                     .collect::<Vec<(usize, u64)>>();
                 (
                     filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::Int(Cow::from(
+                    Values::Int(Rc::from(
                         filtered.into_iter().map(|(_, v)| v).collect::<Vec<u64>>(),
                     )),
                 )
@@ -168,7 +210,7 @@ impl<'a> Values<'a> {
                     .collect::<Vec<(usize, String)>>();
                 (
                     filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::String(Cow::from(
+                    Values::String(Rc::from(
                         filtered
                             .into_iter()
                             .map(|(_, v)| v)
@@ -179,28 +221,49 @@ impl<'a> Values<'a> {
         }
     }
 
-    fn select_by_idx<'b>(&self, indices: &[usize]) -> Values<'b> {
+    fn select_by_idx(&self, indices: &[usize]) -> Values {
         match *self {
             Values::Boolean(ref values) => {
                 let filtered = values
                     .iter()
                     .enumerate()
                     .filter(|&(k, _)| indices.contains(&k))
-                    .map(|(k, v)| v.clone())
+                    .map(|(_, v)| *v)
                     .collect::<Vec<bool>>();
-                Values::Boolean(Cow::from(filtered))
+                Values::Boolean(Rc::from(filtered))
             }
-            _ => unimplemented!(),
+            Values::Int(ref values) => {
+                let filtered = values
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| indices.contains(&k))
+                    .map(|(_, v)| *v)
+                    .collect::<Vec<u64>>();
+                Values::Int(Rc::from(filtered))
+            }
+            Values::String(ref values) => {
+                let filtered = values
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| indices.contains(&k))
+                    .map(|(_, v)| v.clone())
+                    .collect::<Vec<String>>();
+                Values::String(Rc::from(filtered))
+            }
         }
     }
 }
 
-pub struct Pool<'a> {
-    values: HashMap<u64, Values<'a>>,
+pub struct Pool {
+    values: HashMap<u64, Values>,
 }
 
-impl<'a> Pool<'a> {
-    fn size(&self, idx: &u64) -> usize {
+impl Pool {
+    fn new() -> Pool {
+        Pool { values: HashMap::new() }
+    }
+
+    fn len(&self, idx: &u64) -> usize {
         match self.values.get(idx) {
             Some(&Values::Boolean(ref values)) => values.len(),
             Some(&Values::Int(ref values)) => values.len(),
@@ -223,37 +286,37 @@ impl<'a> Pool<'a> {
     fn get_value(&self, col_idx: &u64, row_idx: &u64) -> Option<Value> {
         match self.values.get(col_idx) {
             Some(&Values::Boolean(ref values)) => {
-                Self::get_clone(values.borrow(), row_idx).map(|v| Value::Boolean(v))
+                Self::get_clone(values.as_ref(), row_idx).map(Value::Boolean)
             }
             Some(&Values::Int(ref values)) => {
-                Self::get_clone(values.borrow(), row_idx).map(|v| Value::Int(v))
+                Self::get_clone(values.as_ref(), row_idx).map(Value::Int)
             }
             Some(&Values::String(ref values)) => {
-                Self::get_clone(values.borrow(), row_idx).map(|v| Value::String(v))
+                Self::get_clone(values.as_ref(), row_idx).map(Value::String)
             }
             None => None,
         }
     }
 
-    fn set_values(&mut self, idx: u64, values: Values<'a>) {
+    fn set_values(&mut self, idx: u64, values: Values) {
         self.values.insert(idx, values);
     }
 
     fn set_initial_boolean_values(&mut self, values: Vec<bool>) -> u64 {
         let idx = self.unused_idx();
-        self.values.insert(idx, Values::Boolean(Cow::from(values)));
+        self.values.insert(idx, Values::Boolean(Rc::from(values)));
         idx
     }
 
     fn set_initial_int_values(&mut self, values: Vec<u64>) -> u64 {
         let idx = self.unused_idx();
-        self.values.insert(idx, Values::Int(Cow::from(values)));
+        self.values.insert(idx, Values::Int(Rc::from(values)));
         idx
     }
 
     fn set_initial_string_values(&mut self, values: Vec<String>) -> u64 {
         let idx = self.unused_idx();
-        self.values.insert(idx, Values::String(Cow::from(values)));
+        self.values.insert(idx, Values::String(Rc::from(values)));
         idx
     }
 
@@ -262,7 +325,7 @@ impl<'a> Pool<'a> {
         T: Clone,
     {
         let idx = *idx as usize;
-        if slice.len() >= idx {
+        if slice.len() > idx {
             Some(slice[idx].clone())
         } else {
             None
@@ -283,37 +346,49 @@ impl<'a> Pool<'a> {
 #[derive(Clone)]
 pub struct DataFrame {
     pub schema: Schema,
-    parent: Box<DataFrame>,
-    operation: Operation,
+    parent: Option<Box<DataFrame>>,
+    operation: Option<Operation>,
     pool_indices: BTreeMap<String, u64>,
 }
 
 impl DataFrame {
-    pub fn select(&self, column_names: Vec<String>) -> DataFrame {
+    pub fn new(schema: Schema, pool_indices: BTreeMap<String, u64>) -> DataFrame {
+        DataFrame {
+            schema,
+            pool_indices,
+            parent: None,
+            operation: None,
+        }
+    }
+
+    pub fn select(&self, column_names: &[&str]) -> DataFrame {
+        let operation = Operation::Select(column_names.iter().map(|s| s.to_string()).collect());
         let indices = self.pool_indices
             .iter()
-            .filter(|&(k, _)| column_names.contains(k))
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .filter(|&(k, _)| column_names.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), operation.hash_from_seed(v, k)))
             .collect();
         DataFrame {
-            schema: self.schema.select(&column_names),
-            parent: Box::new(self.clone()),
-            operation: Operation::Select(column_names),
+            schema: self.schema.select(column_names),
+            parent: Some(Box::new(self.clone())),
+            operation: Some(operation),
             pool_indices: indices,
         }
     }
 
-    pub fn filter(&self, column_name: String, predicate: Predicate) -> DataFrame {
-        let seed = self.pool_indices[&column_name];
-        let operation = Operation::Filter(column_name.clone(), predicate);
+    pub fn filter(&self, filter_column_name: &str, predicate: Predicate) -> DataFrame {
+        // let seed = self.pool_indices[column_name];
+        let operation = Operation::Filter(filter_column_name.to_string(), predicate);
         let indices = self.pool_indices
-            .keys()
-            .map(|k| (k.clone(), operation.hash_from_seed(&seed)))
+            .iter()
+            .map(|(col_name, idx)| {
+                (col_name.clone(), operation.hash_from_seed(idx, col_name))
+            })
             .collect();
         DataFrame {
             schema: self.schema.clone(),
-            parent: Box::new(self.clone()),
-            operation: operation,
+            parent: Some(Box::new(self.clone())),
+            operation: Some(operation),
             pool_indices: indices,
         }
     }
@@ -323,19 +398,15 @@ impl DataFrame {
     }
 
     pub fn collect(&self, pool: &mut Pool) -> Vec<Row> {
-        let types = self.schema
-            .columns
-            .iter()
-            .map(|(_, c)| c.type_.clone())
-            .collect::<Vec<Type>>();
+        if self.should_materialize(pool) {
+            self.materialize(pool);
+        }
+
         let mut row_idx = 0;
         let mut rows = vec![];
-        let result_size = *self.pool_indices.values().nth(0).unwrap();
-
-        for (column_name, column) in &self.schema.columns {
-            let col_idx = self.pool_indices[column_name];
-            if !pool.is_column_materialized(&col_idx) {}
-        }
+        let result_size = pool.len(self.pool_indices.values().nth(0).expect(
+            "Empty pool_indices",
+        )) as u64;
 
         loop {
             if row_idx == result_size {
@@ -345,8 +416,8 @@ impl DataFrame {
             for (column_name, column) in &self.schema.columns {
                 let col_idx = self.pool_indices[column_name];
                 let value = match (&column.type_, pool.get_value(&col_idx, &row_idx)) {
-                    (&Type::Boolean, Some(value @ Value::Boolean(_))) => value,
-                    (&Type::Int, Some(value @ Value::Int(_))) => value,
+                    (&Type::Boolean, Some(value @ Value::Boolean(_))) |
+                    (&Type::Int, Some(value @ Value::Int(_))) |
                     (&Type::String, Some(value @ Value::String(_))) => value,
                     (_, None) => {
                         panic!(format!(
@@ -355,25 +426,53 @@ impl DataFrame {
                             row_idx
                         ))
                     }
-                    (type_ @ _, value @ _) => {
-                        panic!(format!("Type error: {:?} != {:?}", type_, value))
-                    }
+                    (type_, value) => panic!(format!("Type error: {:?} != {:?}", type_, value)),
                 };
                 row_values.push(value)
             }
             rows.push(Row {
                 values: row_values,
-                types: types.clone(),
             });
             row_idx += 1;
         }
     }
 
-    fn materialize<'a>(&self, pool: &'a mut Pool<'a>) {
-        match self.operation {
-            Operation::Select(_) => {}
+    fn should_materialize(&self, pool: &Pool) -> bool {
+        self.pool_indices.values().any(|idx| {
+            !pool.is_column_materialized(idx)
+        })
+    }
+
+    fn materialize(&self, pool: &mut Pool) {
+        let parent = match self.parent {
+            Some(ref parent) => parent,
+            None => return,
+        };
+        let operation = match self.operation {
+            Some(ref op) => op,
+            None => unreachable!(),
+        };
+
+        if parent.should_materialize(pool) {
+            parent.materialize(pool)
+        }
+
+        match *operation {
+            Operation::Select(_) => {
+                for (col_name, idx) in &self.pool_indices {
+                    let parent_idx = parent.pool_indices.get(col_name).expect(&format!(
+                        "Parent missing column: {}",
+                        col_name
+                    ));
+                    let parent_values = pool.get_values(parent_idx).expect(&format!(
+                        "Parent column missing in pool: {}",
+                        parent_idx
+                    ));
+                    pool.set_values(*idx, parent_values)
+                }
+            }
             Operation::Filter(ref filter_col_name, ref predicate) => {
-                let filter_col_idx = self.pool_indices.get(filter_col_name).expect(&format!(
+                let filter_col_idx = parent.pool_indices.get(filter_col_name).expect(&format!(
                     "Column missing in pool_indices: filter col => {}",
                     filter_col_name
                 ));
@@ -385,13 +484,13 @@ impl DataFrame {
                     ))
                     .filter(predicate);
                 pool.set_values(
-                    self.operation.hash_from_seed(filter_col_idx),
+                    operation.hash_from_seed(filter_col_idx, filter_col_name),
                     filtered_values,
                 );
 
-                for (col_name, idx) in &self.pool_indices {
+                for (col_name, idx) in &parent.pool_indices {
                     if col_name != filter_col_name {
-                        let new_idx = self.operation.hash_from_seed(idx);
+                        let new_idx = operation.hash_from_seed(idx, col_name);
                         let values = pool.get_values(idx)
                             .expect(&format!("Column missing in pool: {}", col_name))
                             .select_by_idx(&filter_pass_idxs);
@@ -405,5 +504,23 @@ impl DataFrame {
 }
 
 fn main() {
-    println!("Hello world");
+    let mut pool = Pool::new();
+    let bool_idx = pool.set_initial_boolean_values(vec![true, false, true]);
+    let int_idx = pool.set_initial_int_values(vec![1, 2, 3]);
+
+    println!("bool_idx: {}", bool_idx);
+    println!("int_idx: {}", int_idx);
+
+    let schema = Schema::new(&["bool", "int"], &[Type::Boolean, Type::Int]);
+    let mut indices = BTreeMap::new();
+    indices.insert("bool".to_string(), bool_idx);
+    indices.insert("int".to_string(), int_idx);
+
+    let df = DataFrame::new(schema, indices);
+    let filter_df = df.filter("bool", Predicate::new(Comparator::Equal, Value::from(true)));
+    let select_df = filter_df.select(&["int"]);
+
+    println!("select_df.pool_indices: {:?}", select_df.pool_indices);
+    println!("select_df.schema.columns: {:?}", select_df.schema.columns);
+    println!("{:?}", select_df.collect(&mut pool));
 }
