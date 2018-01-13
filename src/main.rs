@@ -5,12 +5,13 @@
 extern crate rand;
 
 use rand::Rng;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::iter::FromIterator;
 use std::rc::Rc;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     Boolean,
     Int,
@@ -53,8 +54,8 @@ struct Column {
 }
 
 impl Column {
-    fn new(type_: &Type) -> Column {
-        Column { type_: type_.clone() }
+    fn new(type_: Type) -> Column {
+        Column { type_ }
     }
 }
 
@@ -67,7 +68,7 @@ impl Schema {
     fn new(names: &[&str], types: &[Type]) -> Schema {
         let mut columns = BTreeMap::new();
         for (idx, name) in names.iter().enumerate() {
-            columns.insert(name.to_string(), Column::new(&types[idx]));
+            columns.insert(name.to_string(), Column::new(types[idx].clone()));
         }
         Schema { columns }
     }
@@ -89,6 +90,77 @@ pub enum Aggregator {
     Sum,
     Max,
     Min,
+}
+
+impl Aggregator {
+    fn output_type(&self, input_type: &Type) -> Type {
+        match *self {
+            Aggregator::Sum => {
+                if input_type == &Type::Int {
+                    Type::Int
+                } else {
+                    panic!(format!(
+                        "Aggregator type error: cannot sum {:?}",
+                        input_type
+                    ))
+                }
+            }
+            Aggregator::First | Aggregator::Max | Aggregator::Min => input_type.clone(),
+        }
+    }
+
+    fn aggregate(&self, input: Values) -> Value {
+        match *self {
+            Aggregator::First => {
+                match input {
+                    Values::Boolean(values) => Value::Boolean(Self::first(&values)),
+                    Values::Int(values) => Value::Int(Self::first(&values)),
+                    Values::String(values) => Value::String(Self::first(&values)),
+                }
+            }
+            Aggregator::Sum => {
+                match input {
+                    Values::Int(values) => Value::Int(values.iter().fold(0, |acc, &v| acc + v)),
+                    _ => panic!("Aggregator type error: cannot sum {:?}", input)
+                }
+            }
+            Aggregator::Max => {
+                match input {
+                    Values::Boolean(values) => Value::Boolean(Self::max(&values)),
+                    Values::Int(values) => Value::Int(Self::max(&values)),
+                    Values::String(values) => Value::String(Self::max(&values)),
+                }
+            }
+            Aggregator::Min => {
+                match input {
+                    Values::Boolean(values) => Value::Boolean(Self::min(&values)),
+                    Values::Int(values) => Value::Int(Self::min(&values)),
+                    Values::String(values) => Value::String(Self::min(&values)),
+                }
+            }
+        }
+    }
+
+    fn first<T: Clone>(values: &[T]) -> T {
+        match values.first() {
+            Some(v) => v.clone(),
+            None => panic!("Agg error: first on empty column")
+        }
+    }
+
+    fn max<T: Clone + Ord>(values: &[T]) -> T {
+        match values.iter().max() {
+            Some(v) => v.clone(),
+            None => panic!("Agg error: max on empty column")
+        }
+    }
+
+    fn min<T: Clone + Ord>(values: &[T]) -> T {
+        match values.iter().min() {
+            Some(v) => v.clone(),
+            None => panic!("Agg error: min on empty column")
+        }
+    }
 }
 
 #[derive(Clone, Hash)]
@@ -182,9 +254,7 @@ impl Values {
                     .collect::<Vec<(usize, bool)>>();
                 (
                     filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::from(
-                        filtered.into_iter().map(|(_, v)| v).collect::<Vec<bool>>(),
-                    ),
+                    Values::from(filtered.into_iter().map(|(_, v)| v).collect::<Vec<bool>>()),
                 )
             }
             Values::Int(ref values) => {
@@ -196,9 +266,7 @@ impl Values {
                     .collect::<Vec<(usize, u64)>>();
                 (
                     filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::from(
-                        filtered.into_iter().map(|(_, v)| v).collect::<Vec<u64>>(),
-                    ),
+                    Values::from(filtered.into_iter().map(|(_, v)| v).collect::<Vec<u64>>()),
                 )
             }
             Values::String(ref values) => {
@@ -269,6 +337,16 @@ impl From<Vec<u64>> for Values {
 impl From<Vec<String>> for Values {
     fn from(values: Vec<String>) -> Self {
         Values::String(Rc::new(values))
+    }
+}
+
+impl From<Value> for Values {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Boolean(value) => Values::Boolean(Rc::new(vec![value])),
+            Value::Int(value) => Values::Int(Rc::new(vec![value])),
+            Value::String(value) => Values::String(Rc::new(vec![value])),
+        }
     }
 }
 
@@ -373,37 +451,67 @@ impl DataFrame {
 
     pub fn select(&self, column_names: &[&str]) -> DataFrame {
         let operation = Operation::Select(column_names.iter().map(|s| s.to_string()).collect());
-        let indices = self.pool_indices
+        let pool_indices = self.pool_indices
             .iter()
             .filter(|&(k, _)| column_names.contains(&k.as_str()))
             .map(|(k, v)| (k.clone(), operation.hash_from_seed(v, k)))
             .collect();
         DataFrame {
+            pool_indices,
             schema: self.schema.select(column_names),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-            pool_indices: indices,
         }
     }
 
     pub fn filter(&self, filter_column_name: &str, predicate: Predicate) -> DataFrame {
         let operation = Operation::Filter(filter_column_name.to_string(), predicate);
-        let indices = self.pool_indices
+        let pool_indices = self.pool_indices
             .iter()
             .map(|(col_name, idx)| {
                 (col_name.clone(), operation.hash_from_seed(idx, col_name))
             })
             .collect();
         DataFrame {
+            pool_indices,
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-            pool_indices: indices,
         }
     }
 
-    pub fn aggregate(&self, aggregators: HashMap<String, Aggregator>) -> DataFrame {
-        unimplemented!()
+    pub fn aggregate(&self, aggregators: BTreeMap<String, Aggregator>) -> DataFrame {
+        {
+            let missing: HashSet<&String> = &HashSet::from_iter(self.schema.columns.keys()) -
+                &HashSet::from_iter(aggregators.keys());
+            if !missing.is_empty() {
+                panic!(format!("Missing aggregates for columns: {:?}", missing))
+            }
+        }
+        let columns = self.schema
+            .columns
+            .iter()
+            .map(|(name, column)| {
+                let aggregator = &aggregators[name];
+                (
+                    name.clone(),
+                    Column::new(aggregator.output_type(&column.type_)),
+                )
+            })
+            .collect::<BTreeMap<String, Column>>();
+        let operation = Operation::Aggregation(aggregators);
+        let pool_indices = self.pool_indices
+            .iter()
+            .map(|(col_name, idx)| {
+                (col_name.clone(), operation.hash_from_seed(idx, col_name))
+            })
+            .collect();
+        DataFrame {
+            pool_indices,
+            schema: Schema { columns },
+            parent: Some(Box::new(self.clone())),
+            operation: Some(operation),
+        }
     }
 
     pub fn collect(&self, pool: &mut Pool) -> Vec<Row> {
@@ -439,9 +547,7 @@ impl DataFrame {
                 };
                 row_values.push(value)
             }
-            rows.push(Row {
-                values: row_values,
-            });
+            rows.push(Row { values: row_values });
             row_idx += 1;
         }
     }
@@ -501,13 +607,20 @@ impl DataFrame {
                     if col_name != filter_col_name {
                         let new_idx = operation.hash_from_seed(idx, col_name);
                         let values = pool.get_values(idx)
-                            .expect(&format!("Column missing in pool: {}", col_name))
+                            .expect(&format!("Parent column missing: {}", col_name))
                             .select_by_idx(&filter_pass_idxs);
                         pool.set_values(new_idx, values)
                     }
                 }
             }
-            Operation::Aggregation(_) => unimplemented!(),
+            Operation::Aggregation(ref aggregators) => {
+                for (col_name, idx) in &parent.pool_indices {
+                    let aggregator = &aggregators[col_name];
+                    let new_idx = operation.hash_from_seed(idx, col_name);
+                    let values = pool.get_values(idx).expect(&format!("Parent column missing: {}", col_name));
+                    pool.set_values(new_idx, Values::from(aggregator.aggregate(values)))
+                }
+            },
         }
     }
 }
@@ -527,4 +640,19 @@ fn main() {
     println!("select_df.pool_indices: {:?}", select_df.pool_indices);
     println!("select_df.schema.columns: {:?}", select_df.schema.columns);
     println!("{:?}", select_df.collect(&mut pool));
+
+    let mut aggregators = BTreeMap::new();
+    aggregators.insert("int".to_string(), Aggregator::First);
+    let first_df = select_df.aggregate(aggregators);
+    println!("{:?}", first_df.collect(&mut pool));
+
+    let mut aggregators = BTreeMap::new();
+    aggregators.insert("int".to_string(), Aggregator::Max);
+    let max_df = select_df.aggregate(aggregators);
+    println!("{:?}", max_df.collect(&mut pool));
+
+    let mut aggregators = BTreeMap::new();
+    aggregators.insert("int".to_string(), Aggregator::Sum);
+    let sum_df = select_df.aggregate(aggregators);
+    println!("{:?}", sum_df.collect(&mut pool));
 }
