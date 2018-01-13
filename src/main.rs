@@ -320,21 +320,9 @@ impl Pool {
         self.values.insert(idx, values);
     }
 
-    fn set_initial_boolean_values(&mut self, values: Vec<bool>) -> u64 {
+    fn set_initial_values(&mut self, values: Values) -> u64 {
         let idx = self.unused_idx();
-        self.values.insert(idx, Values::Boolean(Rc::from(values)));
-        idx
-    }
-
-    fn set_initial_int_values(&mut self, values: Vec<u64>) -> u64 {
-        let idx = self.unused_idx();
-        self.values.insert(idx, Values::Int(Rc::from(values)));
-        idx
-    }
-
-    fn set_initial_string_values(&mut self, values: Vec<String>) -> u64 {
-        let idx = self.unused_idx();
-        self.values.insert(idx, Values::String(Rc::from(values)));
+        self.values.insert(idx, values);
         idx
     }
 
@@ -373,12 +361,7 @@ impl DataFrame {
     pub fn new(pool: &mut Pool, schema: Schema, values: HashMap<String, Values>) -> DataFrame {
         let mut pool_indices = BTreeMap::new();
         for (col_name, col_values) in values {
-            let idx = match col_values {
-                Values::Boolean(v) => pool.set_initial_boolean_values(Self::take_or_clone(v)),
-                Values::Int(v) => pool.set_initial_int_values(Self::take_or_clone(v)),
-                Values::String(v) => pool.set_initial_string_values(Self::take_or_clone(v)),
-            };
-            pool_indices.insert(col_name, idx);
+            pool_indices.insert(col_name, pool.set_initial_values(col_values));
         }
         DataFrame {
             schema,
@@ -525,13 +508,6 @@ impl DataFrame {
                 }
             }
             Operation::Aggregation(_) => unimplemented!(),
-        }
-    }
-
-    fn take_or_clone<T: Clone>(rc: Rc<T>) -> T {
-        match Rc::try_unwrap(rc) {
-            Ok(value) => value,
-            Err(rc_value) => rc_value.as_ref().clone(),
         }
     }
 }
