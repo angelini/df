@@ -164,7 +164,7 @@ impl Operation {
 }
 
 #[derive(Clone, Debug)]
-enum Values {
+pub enum Values {
     Boolean(Rc<Vec<bool>>),
     Int(Rc<Vec<u64>>),
     String(Rc<Vec<String>>),
@@ -182,9 +182,9 @@ impl Values {
                     .collect::<Vec<(usize, bool)>>();
                 (
                     filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::Boolean(Rc::from(
+                    Values::from(
                         filtered.into_iter().map(|(_, v)| v).collect::<Vec<bool>>(),
-                    )),
+                    ),
                 )
             }
             Values::Int(ref values) => {
@@ -196,9 +196,9 @@ impl Values {
                     .collect::<Vec<(usize, u64)>>();
                 (
                     filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::Int(Rc::from(
+                    Values::from(
                         filtered.into_iter().map(|(_, v)| v).collect::<Vec<u64>>(),
-                    )),
+                    ),
                 )
             }
             Values::String(ref values) => {
@@ -210,12 +210,12 @@ impl Values {
                     .collect::<Vec<(usize, String)>>();
                 (
                     filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::String(Rc::from(
+                    Values::from(
                         filtered
                             .into_iter()
                             .map(|(_, v)| v)
                             .collect::<Vec<String>>(),
-                    )),
+                    ),
                 )
             }
         }
@@ -230,7 +230,7 @@ impl Values {
                     .filter(|&(k, _)| indices.contains(&k))
                     .map(|(_, v)| *v)
                     .collect::<Vec<bool>>();
-                Values::Boolean(Rc::from(filtered))
+                Values::from(filtered)
             }
             Values::Int(ref values) => {
                 let filtered = values
@@ -239,7 +239,7 @@ impl Values {
                     .filter(|&(k, _)| indices.contains(&k))
                     .map(|(_, v)| *v)
                     .collect::<Vec<u64>>();
-                Values::Int(Rc::from(filtered))
+                Values::from(filtered)
             }
             Values::String(ref values) => {
                 let filtered = values
@@ -248,9 +248,27 @@ impl Values {
                     .filter(|&(k, _)| indices.contains(&k))
                     .map(|(_, v)| v.clone())
                     .collect::<Vec<String>>();
-                Values::String(Rc::from(filtered))
+                Values::from(filtered)
             }
         }
+    }
+}
+
+impl From<Vec<bool>> for Values {
+    fn from(values: Vec<bool>) -> Self {
+        Values::Boolean(Rc::new(values))
+    }
+}
+
+impl From<Vec<u64>> for Values {
+    fn from(values: Vec<u64>) -> Self {
+        Values::Int(Rc::new(values))
+    }
+}
+
+impl From<Vec<String>> for Values {
+    fn from(values: Vec<String>) -> Self {
+        Values::String(Rc::new(values))
     }
 }
 
@@ -352,7 +370,16 @@ pub struct DataFrame {
 }
 
 impl DataFrame {
-    pub fn new(schema: Schema, pool_indices: BTreeMap<String, u64>) -> DataFrame {
+    pub fn new(pool: &mut Pool, schema: Schema, values: HashMap<String, Values>) -> DataFrame {
+        let mut pool_indices = BTreeMap::new();
+        for (col_name, col_values) in values {
+            let idx = match col_values {
+                Values::Boolean(v) => pool.set_initial_boolean_values(Self::take_or_clone(v)),
+                Values::Int(v) => pool.set_initial_int_values(Self::take_or_clone(v)),
+                Values::String(v) => pool.set_initial_string_values(Self::take_or_clone(v)),
+            };
+            pool_indices.insert(col_name, idx);
+        }
         DataFrame {
             schema,
             pool_indices,
@@ -377,7 +404,6 @@ impl DataFrame {
     }
 
     pub fn filter(&self, filter_column_name: &str, predicate: Predicate) -> DataFrame {
-        // let seed = self.pool_indices[column_name];
         let operation = Operation::Filter(filter_column_name.to_string(), predicate);
         let indices = self.pool_indices
             .iter()
@@ -501,22 +527,24 @@ impl DataFrame {
             Operation::Aggregation(_) => unimplemented!(),
         }
     }
+
+    fn take_or_clone<T: Clone>(rc: Rc<T>) -> T {
+        match Rc::try_unwrap(rc) {
+            Ok(value) => value,
+            Err(rc_value) => rc_value.as_ref().clone(),
+        }
+    }
 }
 
 fn main() {
     let mut pool = Pool::new();
-    let bool_idx = pool.set_initial_boolean_values(vec![true, false, true]);
-    let int_idx = pool.set_initial_int_values(vec![1, 2, 3]);
-
-    println!("bool_idx: {}", bool_idx);
-    println!("int_idx: {}", int_idx);
-
     let schema = Schema::new(&["bool", "int"], &[Type::Boolean, Type::Int]);
-    let mut indices = BTreeMap::new();
-    indices.insert("bool".to_string(), bool_idx);
-    indices.insert("int".to_string(), int_idx);
 
-    let df = DataFrame::new(schema, indices);
+    let mut values = HashMap::new();
+    values.insert("bool".to_string(), Values::from(vec![true, false, true]));
+    values.insert("int".to_string(), Values::from(vec![1, 2, 3]));
+
+    let df = DataFrame::new(&mut pool, schema, values);
     let filter_df = df.filter("bool", Predicate::new(Comparator::Equal, Value::from(true)));
     let select_df = filter_df.select(&["int"]);
 
