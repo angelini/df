@@ -144,34 +144,69 @@ impl Values {
 
     pub fn select_by_idx(&self, indices: &[usize]) -> Values {
         match *self {
+            Values::Boolean(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
+            Values::Int(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
+            Values::String(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
+        }
+    }
+
+    pub fn sort(
+        &self,
+        parent_sorting: &Option<&[usize]>,
+        only_use_parent: bool,
+    ) -> (Vec<usize>, Values) {
+        match *self {
             Values::Boolean(ref values) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(k, _)| indices.contains(&k))
-                    .map(|(_, v)| *v)
-                    .collect::<Vec<bool>>();
-                Values::from(filtered)
+                let (indices, sorted_values) =
+                    Self::gen_sort(values, parent_sorting, only_use_parent);
+                (indices, Values::from(sorted_values))
             }
             Values::Int(ref values) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(k, _)| indices.contains(&k))
-                    .map(|(_, v)| *v)
-                    .collect::<Vec<u64>>();
-                Values::from(filtered)
+                let (indices, sorted_values) =
+                    Self::gen_sort(values, parent_sorting, only_use_parent);
+                (indices, Values::from(sorted_values))
             }
             Values::String(ref values) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(k, _)| indices.contains(&k))
-                    .map(|(_, v)| v.clone())
-                    .collect::<Vec<String>>();
-                Values::from(filtered)
+                let (indices, sorted_values) =
+                    Self::gen_sort(values, parent_sorting, only_use_parent);
+                (indices, Values::from(sorted_values))
             }
         }
+    }
+
+    fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
+        values
+            .iter()
+            .enumerate()
+            .filter(|&(k, _)| indices.contains(&k))
+            .map(|(_, v)| v.clone())
+            .collect()
+    }
+
+    fn gen_sort<T: Clone + Ord>(
+        values: &[T],
+        parent_sorting: &Option<&[usize]>,
+        only_use_parent: bool,
+    ) -> (Vec<usize>, Vec<T>) {
+        let mut sorted = values.iter().enumerate().collect::<Vec<(usize, &T)>>();
+        sorted.sort_by(|&(left_idx, left_value), &(right_idx, right_value)| {
+            match *parent_sorting {
+                Some(sort_indices) => {
+                    let left_sort = sort_indices[left_idx];
+                    let right_sort = sort_indices[right_idx];
+                    if left_sort == right_sort && !only_use_parent {
+                        left_value.cmp(right_value)
+                    } else {
+                        left_sort.cmp(&right_sort)
+                    }
+                }
+                None => left_value.cmp(right_value),
+            }
+        });
+        (
+            sorted.iter().map(|&(k, _)| k).collect(),
+            sorted.into_iter().map(|(_, v)| v.clone()).collect(),
+        )
     }
 }
 

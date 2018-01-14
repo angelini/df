@@ -18,8 +18,11 @@ fn main() {
     let schema = Schema::new(&["bool", "int"], &[Type::Boolean, Type::Int]);
 
     let mut values = HashMap::new();
-    values.insert("bool".to_string(), Values::from(vec![true, false, true]));
-    values.insert("int".to_string(), Values::from(vec![1, 2, 3]));
+    values.insert(
+        "bool".to_string(),
+        Values::from(vec![false, true, false, true]),
+    );
+    values.insert("int".to_string(), Values::from(vec![4, 3, 2, 1]));
 
     let df = DataFrame::new(&mut pool, schema, values);
 
@@ -41,4 +44,7 @@ fn main() {
     aggregators.insert("int".to_string(), Aggregator::Sum);
     let sum_df = select_df.aggregate(aggregators);
     println!("{:?}", sum_df.collect(&mut pool));
+
+    let sort_df = df.sort(&["int"]);
+    println!("{:?}", sort_df.collect(&mut pool));
 }
