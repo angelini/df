@@ -41,6 +41,7 @@ impl Pool {
         match self.entries.get(idx).map(|entry| &entry.values) {
             Some(&Values::Boolean(ref values)) => values.len(),
             Some(&Values::Int(ref values)) => values.len(),
+            Some(&Values::Float(ref values)) => values.len(),
             Some(&Values::String(ref values)) => values.len(),
             None => 0,
         }
@@ -67,6 +68,9 @@ impl Pool {
             }
             Some(&Values::Int(ref values)) => {
                 Self::get_clone(values.as_ref(), row_idx).map(Value::Int)
+            }
+            Some(&Values::Float(ref values)) => {
+                Self::get_clone(values.as_ref(), row_idx).map(Value::Float)
             }
             Some(&Values::String(ref values)) => {
                 Self::get_clone(values.as_ref(), row_idx).map(Value::String)

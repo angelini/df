@@ -2,11 +2,12 @@
 
 #![plugin(clippy)]
 
+extern crate decorum;
+extern crate rand;
+
 mod dataframe;
 mod pool;
 mod value;
-
-extern crate rand;
 
 use dataframe::{Aggregator, DataFrame, Schema};
 use pool::Pool;

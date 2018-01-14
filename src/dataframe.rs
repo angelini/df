@@ -1,3 +1,4 @@
+use decorum::R64;
 use pool::{self, Pool};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
@@ -9,12 +10,14 @@ use value::{self, Predicate, Type, Value, Values};
 
 #[derive(Debug)]
 pub enum AggregateError {
+    EmptyColumn,
     SumOnInvalidType(Type),
 }
 
 impl fmt::Display for AggregateError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            AggregateError::EmptyColumn => write!(f, "Aggregate on empty column"),
             AggregateError::SumOnInvalidType(type_) => write!(f, "Sum aggregate on {:?} column", type_),
         }
     }
@@ -130,52 +133,56 @@ impl Aggregator {
         Ok(match *self {
             Aggregator::First => {
                 match input {
-                    Values::Boolean(values) => Value::Boolean(Self::first(&values)),
-                    Values::Int(values) => Value::Int(Self::first(&values)),
-                    Values::String(values) => Value::String(Self::first(&values)),
+                    Values::Boolean(values) => Value::Boolean(Self::first(&values)?),
+                    Values::Int(values) => Value::Int(Self::first(&values)?),
+                    Values::Float(values) => Value::Float(Self::first(&values)?),
+                    Values::String(values) => Value::String(Self::first(&values)?),
                 }
             }
             Aggregator::Sum => {
                 match input {
                     Values::Int(values) => Value::Int(values.iter().fold(0, |acc, &v| acc + v)),
+                    Values::Float(values) => Value::Float(values.iter().fold(R64::from_inner(0.0), |acc, &v| acc + v)),
                     _ => return Err(AggregateError::SumOnInvalidType(input.type_())),
                 }
             }
             Aggregator::Max => {
                 match input {
-                    Values::Boolean(values) => Value::Boolean(Self::max(&values)),
-                    Values::Int(values) => Value::Int(Self::max(&values)),
-                    Values::String(values) => Value::String(Self::max(&values)),
+                    Values::Boolean(values) => Value::Boolean(Self::max(&values)?),
+                    Values::Int(values) => Value::Int(Self::max(&values)?),
+                    Values::Float(values) => Value::Float(Self::max(&values)?),
+                    Values::String(values) => Value::String(Self::max(&values)?),
                 }
             }
             Aggregator::Min => {
                 match input {
-                    Values::Boolean(values) => Value::Boolean(Self::min(&values)),
-                    Values::Int(values) => Value::Int(Self::min(&values)),
-                    Values::String(values) => Value::String(Self::min(&values)),
+                    Values::Boolean(values) => Value::Boolean(Self::min(&values)?),
+                    Values::Int(values) => Value::Int(Self::min(&values)?),
+                    Values::Float(values) => Value::Float(Self::min(&values)?),
+                    Values::String(values) => Value::String(Self::min(&values)?),
                 }
             }
         })
     }
 
-    fn first<T: Clone>(values: &[T]) -> T {
+    fn first<T: Clone>(values: &[T]) -> AggregateResult<T> {
         match values.first() {
-            Some(v) => v.clone(),
-            None => panic!("Agg error: first on empty column"),
+            Some(v) => Ok(v.clone()),
+            None => Err(AggregateError::EmptyColumn),
         }
     }
 
-    fn max<T: Clone + Ord>(values: &[T]) -> T {
+    fn max<T: Clone + Ord>(values: &[T]) -> AggregateResult<T> {
         match values.iter().max() {
-            Some(v) => v.clone(),
-            None => panic!("Agg error: max on empty column"),
+            Some(v) => Ok(v.clone()),
+            None => Err(AggregateError::EmptyColumn),
         }
     }
 
-    fn min<T: Clone + Ord>(values: &[T]) -> T {
+    fn min<T: Clone + Ord>(values: &[T]) -> AggregateResult<T> {
         match values.iter().min() {
-            Some(v) => v.clone(),
-            None => panic!("Agg error: min on empty column"),
+            Some(v) => Ok(v.clone()),
+            None => Err(AggregateError::EmptyColumn),
         }
     }
 }

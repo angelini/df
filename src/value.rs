@@ -1,3 +1,4 @@
+use decorum::R64;
 use std::fmt;
 use std::rc::Rc;
 use std::result;
@@ -21,6 +22,7 @@ type Result<T> = result::Result<T, Error>;
 pub enum Type {
     Boolean,
     Int,
+    Float,
     String,
 }
 
@@ -28,6 +30,7 @@ pub enum Type {
 pub enum Value {
     Boolean(bool),
     Int(u64),
+    Float(R64),
     String(String),
 }
 
@@ -36,6 +39,7 @@ impl Value {
         match *self {
             Value::Boolean(_) => Type::Boolean,
             Value::Int(_) => Type::Int,
+            Value::Float(_) => Type::Float,
             Value::String(_) => Type::String,
         }
     }
@@ -53,6 +57,12 @@ impl From<u64> for Value {
     }
 }
 
+impl From<R64> for Value {
+    fn from(value: R64) -> Self {
+        Value::Float(value)
+    }
+}
+
 impl From<String> for Value {
     fn from(value: String) -> Self {
         Value::String(value)
@@ -63,6 +73,7 @@ impl From<String> for Value {
 pub enum Values {
     Boolean(Rc<Vec<bool>>),
     Int(Rc<Vec<u64>>),
+    Float(Rc<Vec<R64>>),
     String(Rc<Vec<String>>),
 }
 
@@ -71,6 +82,7 @@ impl Values {
         match *self {
             Values::Boolean(_) => Type::Boolean,
             Values::Int(_) => Type::Int,
+            Values::Float(_) => Type::Float,
             Values::String(_) => Type::String,
         }
     }
@@ -79,6 +91,7 @@ impl Values {
         match *self {
             Values::Boolean(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
             Values::Int(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
+            Values::Float(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
             Values::String(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
         }
     }
@@ -95,6 +108,11 @@ impl Values {
                 (indices, Values::from(sorted_values))
             }
             Values::Int(ref values) => {
+                let (indices, sorted_values) =
+                    Self::gen_sort(values, parent_sorting, only_use_parent);
+                (indices, Values::from(sorted_values))
+            }
+            Values::Float(ref values) => {
                 let (indices, sorted_values) =
                     Self::gen_sort(values, parent_sorting, only_use_parent);
                 (indices, Values::from(sorted_values))
@@ -155,6 +173,12 @@ impl From<Vec<u64>> for Values {
     }
 }
 
+impl From<Vec<R64>> for Values {
+    fn from(values: Vec<R64>) -> Self {
+        Values::Float(Rc::new(values))
+    }
+}
+
 impl From<Vec<String>> for Values {
     fn from(values: Vec<String>) -> Self {
         Values::String(Rc::new(values))
@@ -166,6 +190,7 @@ impl From<Value> for Values {
         match value {
             Value::Boolean(value) => Values::Boolean(Rc::new(vec![value])),
             Value::Int(value) => Values::Int(Rc::new(vec![value])),
+            Value::Float(value) => Values::Float(Rc::new(vec![value])),
             Value::String(value) => Values::String(Rc::new(vec![value])),
         }
     }
@@ -206,51 +231,35 @@ impl Predicate {
     pub fn filter(&self, values: &Values) -> Result<(Vec<usize>, Values)> {
         match (values, &self.value) {
             (&Values::Boolean(ref values), &Value::Boolean(ref value)) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, v)| self.comparator.pass(v, value))
-                    .map(|(k, v)| (k, *v))
-                    .collect::<Vec<(usize, bool)>>();
-                Ok((
-                    filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::from(
-                        filtered.into_iter().map(|(_, v)| v).collect::<Vec<bool>>(),
-                    ),
-                ))
+                let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
+                Ok((indices, Values::from(filtered_values)))
             }
             (&Values::Int(ref values), &Value::Int(ref value)) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, v)| self.comparator.pass(v, value))
-                    .map(|(k, v)| (k, *v))
-                    .collect::<Vec<(usize, u64)>>();
-                Ok((
-                    filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::from(
-                        filtered.into_iter().map(|(_, v)| v).collect::<Vec<u64>>(),
-                    ),
-                ))
+                let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
+                Ok((indices, Values::from(filtered_values)))
+            }
+            (&Values::Float(ref values), &Value::Float(ref value)) => {
+                let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
+                Ok((indices, Values::from(filtered_values)))
             }
             (&Values::String(ref values), &Value::String(ref value)) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, v)| self.comparator.pass(v, value))
-                    .map(|(k, v)| (k, v.clone()))
-                    .collect::<Vec<(usize, String)>>();
-                Ok((
-                    filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::from(
-                        filtered
-                            .into_iter()
-                            .map(|(_, v)| v)
-                            .collect::<Vec<String>>(),
-                    ),
-                ))
+                let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
+                Ok((indices, Values::from(filtered_values)))
             }
             (values, value) => Err(Error::PredicateAndValueTypes(values.type_(), value.type_())),
         }
+    }
+
+    fn gen_filter<T: Clone + Ord>(comparator: &Comparator, values: &[T], value: &T) -> (Vec<usize>, Vec<T>) {
+        let filtered = values
+            .iter()
+            .enumerate()
+            .filter(|&(_, v)| comparator.pass(v, value))
+            .map(|(k, v)| (k, v.clone()))
+            .collect::<Vec<(usize, T)>>();
+        (
+            filtered.iter().map(|&(k, _)| k).collect(),
+            filtered.into_iter().map(|(_, v)| v).collect(),
+        )
     }
 }
