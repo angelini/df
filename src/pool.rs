@@ -1,11 +1,20 @@
 use rand::{self, Rng};
 use std::collections::HashMap;
+use std::fmt;
 use std::result;
 use value::{Value, Values};
 
 #[derive(Debug)]
 pub enum Error {
     MissingIndex(u64),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::MissingIndex(idx) => write!(f, "Index {} not found in pool", idx),
+        }
+    }
 }
 
 type Result<T> = result::Result<T, Error>;

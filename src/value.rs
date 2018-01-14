@@ -1,9 +1,18 @@
+use std::fmt;
 use std::rc::Rc;
 use std::result;
 
 #[derive(Debug)]
 pub enum Error {
     PredicateAndValueTypes(Type, Type),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::PredicateAndValueTypes(predicate_type, value_type) => write!(f, "Predicate type ({:?}) and value type ({:?}) mismatch", predicate_type, value_type),
+        }
+    }
 }
 
 type Result<T> = result::Result<T, Error>;

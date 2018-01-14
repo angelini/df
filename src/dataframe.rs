@@ -1,6 +1,7 @@
 use pool::{self, Pool};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
 use std::result;
@@ -9,6 +10,14 @@ use value::{self, Predicate, Type, Value, Values};
 #[derive(Debug)]
 pub enum AggregateError {
     SumOnInvalidType(Type),
+}
+
+impl fmt::Display for AggregateError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            AggregateError::SumOnInvalidType(type_) => write!(f, "Sum aggregate on {:?} column", type_),
+        }
+    }
 }
 
 type AggregateResult<T> = result::Result<T, AggregateError>;
@@ -37,6 +46,18 @@ impl From<pool::Error> for Error {
 impl From<value::Error> for Error {
     fn from(error: value::Error) -> Error {
         Error::Value(error)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::MissingColumnInIndices(ref col_name) => write!(f, "Missing column in indices {}", col_name),
+            Error::SortingWithNoSortColumns => write!(f, "Sort called without any sort columns"),
+            Error::Aggregate(ref error) => write!(f, "{}", error),
+            Error::Pool(ref error) => write!(f, "{}", error),
+            Error::Value(ref error) => write!(f, "{}", error),
+        }
     }
 }
 
@@ -199,22 +220,22 @@ impl DataFrame {
         }
     }
 
-    pub fn select(&self, column_names: &[&str]) -> DataFrame {
+    pub fn select(&self, column_names: &[&str]) -> Result<DataFrame> {
         let operation = Operation::Select(column_names.iter().map(|s| s.to_string()).collect());
         let pool_indices = self.pool_indices
             .iter()
             .filter(|&(k, _)| column_names.contains(&k.as_str()))
             .map(|(k, v)| (k.clone(), operation.hash_from_seed(v, k)))
             .collect();
-        DataFrame {
+        Ok(DataFrame {
             pool_indices,
             schema: self.schema.select(column_names),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-        }
+        })
     }
 
-    pub fn filter(&self, filter_column_name: &str, predicate: Predicate) -> DataFrame {
+    pub fn filter(&self, filter_column_name: &str, predicate: Predicate) -> Result<DataFrame> {
         let operation = Operation::Filter(filter_column_name.to_string(), predicate);
         let pool_indices = self.pool_indices
             .iter()
@@ -222,15 +243,15 @@ impl DataFrame {
                 (col_name.clone(), operation.hash_from_seed(idx, col_name))
             })
             .collect();
-        DataFrame {
+        Ok(DataFrame {
             pool_indices,
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-        }
+        })
     }
 
-    pub fn sort(&self, column_names: &[&str]) -> DataFrame {
+    pub fn sort(&self, column_names: &[&str]) -> Result<DataFrame> {
         let operation = Operation::Sort(column_names.iter().map(|s| s.to_string()).collect());
         let pool_indices = self.pool_indices
             .iter()
@@ -238,15 +259,15 @@ impl DataFrame {
                 (col_name.clone(), operation.hash_from_seed(idx, col_name))
             })
             .collect();
-        DataFrame {
+        Ok(DataFrame {
             pool_indices,
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-        }
+        })
     }
 
-    pub fn aggregate(&self, aggregators: BTreeMap<String, Aggregator>) -> DataFrame {
+    pub fn aggregate(&self, aggregators: BTreeMap<String, Aggregator>) -> Result<DataFrame> {
         {
             let missing: HashSet<&String> = &HashSet::from_iter(self.schema.columns.keys()) -
                 &HashSet::from_iter(aggregators.keys());
@@ -259,12 +280,12 @@ impl DataFrame {
             .iter()
             .map(|(name, column)| {
                 let aggregator = &aggregators[name];
-                (
+                Ok((
                     name.clone(),
-                    Column::new(aggregator.output_type(&column.type_).unwrap()),
-                )
+                    Column::new(aggregator.output_type(&column.type_)?),
+                ))
             })
-            .collect::<BTreeMap<String, Column>>();
+            .collect::<Result<BTreeMap<String, Column>>>()?;
         let operation = Operation::Aggregation(aggregators);
         let pool_indices = self.pool_indices
             .iter()
@@ -272,17 +293,17 @@ impl DataFrame {
                 (col_name.clone(), operation.hash_from_seed(idx, col_name))
             })
             .collect();
-        DataFrame {
+        Ok(DataFrame {
             pool_indices,
             schema: Schema { columns },
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-        }
+        })
     }
 
-    pub fn collect(&self, pool: &mut Pool) -> Vec<Row> {
+    pub fn collect(&self, pool: &mut Pool) -> Result<Vec<Row>> {
         if self.should_materialize(pool) {
-            self.materialize(pool).unwrap();
+            self.materialize(pool)?;
         }
 
         let mut row_idx = 0;
@@ -293,7 +314,7 @@ impl DataFrame {
 
         loop {
             if row_idx == result_size {
-                return rows;
+                return Ok(rows);
             }
             let mut row_values = vec![];
             for (column_name, column) in &self.schema.columns {
