@@ -1,6 +1,14 @@
 use std::rc::Rc;
+use std::result;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
+pub enum Error {
+    PredicateAndValueTypes(Type, Type),
+}
+
+type Result<T> = result::Result<T, Error>;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Type {
     Boolean,
     Int,
@@ -12,6 +20,16 @@ pub enum Value {
     Boolean(bool),
     Int(u64),
     String(String),
+}
+
+impl Value {
+    pub fn type_(&self) -> Type {
+        match *self {
+            Value::Boolean(_) => Type::Boolean,
+            Value::Int(_) => Type::Int,
+            Value::String(_) => Type::String,
+        }
+    }
 }
 
 impl From<bool> for Value {
@@ -32,62 +50,6 @@ impl From<String> for Value {
     }
 }
 
-
-#[derive(Clone, Hash)]
-pub enum Comparator {
-    Equal,
-    GreaterThan,
-    GreaterThanOrEq,
-    LessThan,
-    LessThanOrEq,
-}
-
-impl Comparator {
-    fn pass<T: Eq + Ord>(&self, left: &T, right: &T) -> bool {
-        match *self {
-            Comparator::Equal => left == right,
-            Comparator::GreaterThan => left > right,
-            Comparator::GreaterThanOrEq => left >= right,
-            Comparator::LessThan => left < right,
-            Comparator::LessThanOrEq => left <= right,
-        }
-    }
-}
-
-#[derive(Clone, Hash)]
-pub struct Predicate {
-    comparator: Comparator,
-    value: Value,
-}
-
-impl Predicate {
-    pub fn new(comparator: Comparator, value: Value) -> Predicate {
-        Predicate { comparator, value }
-    }
-
-    fn boolean_pass(&self, other: &bool) -> bool {
-        match self.value {
-            Value::Boolean(value) => self.comparator.pass(&value, other),
-            _ => panic!(format!("Type error: boolean predicate against {:?}", other)),
-        }
-    }
-
-    fn int_pass(&self, other: &u64) -> bool {
-        match self.value {
-            Value::Int(value) => self.comparator.pass(&value, other),
-            _ => panic!(format!("Type error: boolean predicate against {:?}", other)),
-        }
-    }
-
-    #[allow(ptr_arg)]
-    fn string_pass(&self, other: &String) -> bool {
-        match self.value {
-            Value::String(ref value) => self.comparator.pass(value, other),
-            _ => panic!(format!("Type error: boolean predicate against {:?}", other)),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Values {
     Boolean(Rc<Vec<bool>>),
@@ -96,49 +58,11 @@ pub enum Values {
 }
 
 impl Values {
-    pub fn filter(&self, predicate: &Predicate) -> (Vec<usize>, Values) {
+    pub fn type_(&self) -> Type {
         match *self {
-            Values::Boolean(ref values) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, v)| predicate.boolean_pass(v))
-                    .map(|(k, v)| (k, *v))
-                    .collect::<Vec<(usize, bool)>>();
-                (
-                    filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::from(filtered.into_iter().map(|(_, v)| v).collect::<Vec<bool>>()),
-                )
-            }
-            Values::Int(ref values) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, v)| predicate.int_pass(v))
-                    .map(|(k, v)| (k, *v))
-                    .collect::<Vec<(usize, u64)>>();
-                (
-                    filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::from(filtered.into_iter().map(|(_, v)| v).collect::<Vec<u64>>()),
-                )
-            }
-            Values::String(ref values) => {
-                let filtered = values
-                    .iter()
-                    .enumerate()
-                    .filter(|&(_, v)| predicate.string_pass(v))
-                    .map(|(k, v)| (k, v.clone()))
-                    .collect::<Vec<(usize, String)>>();
-                (
-                    filtered.iter().map(|&(k, _)| k).collect(),
-                    Values::from(
-                        filtered
-                            .into_iter()
-                            .map(|(_, v)| v)
-                            .collect::<Vec<String>>(),
-                    ),
-                )
-            }
+            Values::Boolean(_) => Type::Boolean,
+            Values::Int(_) => Type::Int,
+            Values::String(_) => Type::String,
         }
     }
 
@@ -234,6 +158,90 @@ impl From<Value> for Values {
             Value::Boolean(value) => Values::Boolean(Rc::new(vec![value])),
             Value::Int(value) => Values::Int(Rc::new(vec![value])),
             Value::String(value) => Values::String(Rc::new(vec![value])),
+        }
+    }
+}
+
+#[derive(Clone, Hash)]
+pub enum Comparator {
+    Equal,
+    GreaterThan,
+    GreaterThanOrEq,
+    LessThan,
+    LessThanOrEq,
+}
+
+impl Comparator {
+    fn pass<T: Eq + Ord>(&self, left: &T, right: &T) -> bool {
+        match *self {
+            Comparator::Equal => left == right,
+            Comparator::GreaterThan => left > right,
+            Comparator::GreaterThanOrEq => left >= right,
+            Comparator::LessThan => left < right,
+            Comparator::LessThanOrEq => left <= right,
+        }
+    }
+}
+
+#[derive(Clone, Hash)]
+pub struct Predicate {
+    comparator: Comparator,
+    value: Value,
+}
+
+impl Predicate {
+    pub fn new(comparator: Comparator, value: Value) -> Predicate {
+        Predicate { comparator, value }
+    }
+
+    pub fn filter(&self, values: &Values) -> Result<(Vec<usize>, Values)> {
+        match (values, &self.value) {
+            (&Values::Boolean(ref values), &Value::Boolean(ref value)) => {
+                let filtered = values
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, v)| self.comparator.pass(v, value))
+                    .map(|(k, v)| (k, *v))
+                    .collect::<Vec<(usize, bool)>>();
+                Ok((
+                    filtered.iter().map(|&(k, _)| k).collect(),
+                    Values::from(
+                        filtered.into_iter().map(|(_, v)| v).collect::<Vec<bool>>(),
+                    ),
+                ))
+            }
+            (&Values::Int(ref values), &Value::Int(ref value)) => {
+                let filtered = values
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, v)| self.comparator.pass(v, value))
+                    .map(|(k, v)| (k, *v))
+                    .collect::<Vec<(usize, u64)>>();
+                Ok((
+                    filtered.iter().map(|&(k, _)| k).collect(),
+                    Values::from(
+                        filtered.into_iter().map(|(_, v)| v).collect::<Vec<u64>>(),
+                    ),
+                ))
+            }
+            (&Values::String(ref values), &Value::String(ref value)) => {
+                let filtered = values
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, v)| self.comparator.pass(v, value))
+                    .map(|(k, v)| (k, v.clone()))
+                    .collect::<Vec<(usize, String)>>();
+                Ok((
+                    filtered.iter().map(|&(k, _)| k).collect(),
+                    Values::from(
+                        filtered
+                            .into_iter()
+                            .map(|(_, v)| v)
+                            .collect::<Vec<String>>(),
+                    ),
+                ))
+            }
+            (values, value) => Err(Error::PredicateAndValueTypes(values.type_(), value.type_())),
         }
     }
 }

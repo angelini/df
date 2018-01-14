@@ -1,6 +1,14 @@
 use rand::{self, Rng};
 use std::collections::HashMap;
+use std::result;
 use value::{Value, Values};
+
+#[derive(Debug)]
+pub enum Error {
+    MissingIndex(u64),
+}
+
+type Result<T> = result::Result<T, Error>;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -36,8 +44,11 @@ impl Pool {
         }
     }
 
-    pub fn get_entry(&self, idx: &u64) -> Option<Entry> {
-        self.entries.get(idx).cloned()
+    pub fn get_entry(&self, idx: &u64) -> Result<Entry> {
+        match self.entries.get(idx) {
+            Some(entry) => Ok(entry.clone()),
+            None => Err(Error::MissingIndex(*idx)),
+        }
     }
 
     pub fn get_value(&self, col_idx: &u64, row_idx: &u64) -> Option<Value> {

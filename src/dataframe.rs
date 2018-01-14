@@ -1,9 +1,46 @@
-use pool::Pool;
+use pool::{self, Pool};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
-use value::{Predicate, Type, Value, Values};
+use std::result;
+use value::{self, Predicate, Type, Value, Values};
+
+#[derive(Debug)]
+pub enum AggregateError {
+    SumOnInvalidType(Type),
+}
+
+type AggregateResult<T> = result::Result<T, AggregateError>;
+
+#[derive(Debug)]
+pub enum Error {
+    MissingColumnInIndices(String),
+    SortingWithNoSortColumns,
+    Aggregate(AggregateError),
+    Pool(pool::Error),
+    Value(value::Error),
+}
+
+impl From<AggregateError> for Error {
+    fn from(error: AggregateError) -> Error {
+        Error::Aggregate(error)
+    }
+}
+
+impl From<pool::Error> for Error {
+    fn from(error: pool::Error) -> Error {
+        Error::Pool(error)
+    }
+}
+
+impl From<value::Error> for Error {
+    fn from(error: value::Error) -> Error {
+        Error::Value(error)
+    }
+}
+
+type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
 pub struct Row {
@@ -30,7 +67,7 @@ impl Schema {
     pub fn new(names: &[&str], types: &[Type]) -> Schema {
         let mut columns = BTreeMap::new();
         for (idx, name) in names.iter().enumerate() {
-            columns.insert(name.to_string(), Column::new(types[idx].clone()));
+            columns.insert(name.to_string(), Column::new(types[idx]));
         }
         Schema { columns }
     }
@@ -55,24 +92,21 @@ pub enum Aggregator {
 }
 
 impl Aggregator {
-    fn output_type(&self, input_type: &Type) -> Type {
+    fn output_type(&self, input_type: &Type) -> AggregateResult<Type> {
         match *self {
             Aggregator::Sum => {
                 if input_type == &Type::Int {
-                    Type::Int
+                    Ok(Type::Int)
                 } else {
-                    panic!(format!(
-                        "Aggregator type error: cannot sum {:?}",
-                        input_type
-                    ))
+                    Err(AggregateError::SumOnInvalidType(*input_type))
                 }
             }
-            Aggregator::First | Aggregator::Max | Aggregator::Min => input_type.clone(),
+            Aggregator::First | Aggregator::Max | Aggregator::Min => Ok(*input_type),
         }
     }
 
-    fn aggregate(&self, input: Values) -> Value {
-        match *self {
+    fn aggregate(&self, input: Values) -> AggregateResult<Value> {
+        Ok(match *self {
             Aggregator::First => {
                 match input {
                     Values::Boolean(values) => Value::Boolean(Self::first(&values)),
@@ -83,7 +117,7 @@ impl Aggregator {
             Aggregator::Sum => {
                 match input {
                     Values::Int(values) => Value::Int(values.iter().fold(0, |acc, &v| acc + v)),
-                    _ => panic!("Aggregator type error: cannot sum {:?}", input),
+                    _ => return Err(AggregateError::SumOnInvalidType(input.type_())),
                 }
             }
             Aggregator::Max => {
@@ -100,7 +134,7 @@ impl Aggregator {
                     Values::String(values) => Value::String(Self::min(&values)),
                 }
             }
-        }
+        })
     }
 
     fn first<T: Clone>(values: &[T]) -> T {
@@ -227,7 +261,7 @@ impl DataFrame {
                 let aggregator = &aggregators[name];
                 (
                     name.clone(),
-                    Column::new(aggregator.output_type(&column.type_)),
+                    Column::new(aggregator.output_type(&column.type_).unwrap()),
                 )
             })
             .collect::<BTreeMap<String, Column>>();
@@ -248,7 +282,7 @@ impl DataFrame {
 
     pub fn collect(&self, pool: &mut Pool) -> Vec<Row> {
         if self.should_materialize(pool) {
-            self.materialize(pool);
+            self.materialize(pool).unwrap();
         }
 
         let mut row_idx = 0;
@@ -290,10 +324,10 @@ impl DataFrame {
         })
     }
 
-    fn materialize(&self, pool: &mut Pool) {
+    fn materialize(&self, pool: &mut Pool) -> Result<()> {
         let parent = match self.parent {
             Some(ref parent) => parent,
-            None => return,
+            None => return Ok(()),
         };
         let operation = match self.operation {
             Some(ref op) => op,
@@ -301,35 +335,27 @@ impl DataFrame {
         };
 
         if parent.should_materialize(pool) {
-            parent.materialize(pool)
+            parent.materialize(pool)?
         }
 
         match *operation {
             Operation::Select(_) => {
                 for (col_name, idx) in &self.pool_indices {
-                    let parent_idx = parent.pool_indices.get(col_name).expect(&format!(
-                        "Parent column missing pool_indices: {}",
-                        col_name
-                    ));
-                    let parent_entry = pool.get_entry(parent_idx).expect(&format!(
-                        "Parent entry missing in pool: {}",
-                        parent_idx
-                    ));
+                    let parent_idx = parent.pool_indices.get(col_name).ok_or_else(|| {
+                        Error::MissingColumnInIndices(col_name.to_string())
+                    })?;
+                    let parent_entry = pool.get_entry(parent_idx)?;
                     pool.set_values(*idx, parent_entry.values, parent_entry.sorted)
                 }
             }
             Operation::Filter(ref filter_col_name, ref predicate) => {
-                let filter_col_idx = parent.pool_indices.get(filter_col_name).expect(&format!(
-                    "Column missing in pool_indices: filter col => {}",
-                    filter_col_name
-                ));
+                let filter_col_idx = parent.pool_indices.get(filter_col_name).ok_or_else(|| {
+                    Error::MissingColumnInIndices(filter_col_name.to_string())
+                })?;
 
-                let filter_entry = pool.get_entry(filter_col_idx).expect(&format!(
-                    "Entry missing in pool: filter col idx {}",
-                    filter_col_idx
-                ));
+                let filter_entry = pool.get_entry(filter_col_idx)?;
 
-                let (filter_pass_idxs, filtered_values) = filter_entry.values.filter(predicate);
+                let (filter_pass_idxs, filtered_values) = predicate.filter(&filter_entry.values)?;
                 pool.set_values(
                     operation.hash_from_seed(filter_col_idx, filter_col_name),
                     filtered_values,
@@ -339,10 +365,7 @@ impl DataFrame {
                 for (col_name, idx) in &parent.pool_indices {
                     if col_name != filter_col_name {
                         let new_idx = operation.hash_from_seed(idx, col_name);
-                        let entry = pool.get_entry(idx).expect(&format!(
-                            "Parent entry missing in pool: {}",
-                            col_name
-                        ));
+                        let entry = pool.get_entry(idx)?;
                         let values = entry.values.select_by_idx(&filter_pass_idxs);
                         pool.set_values(new_idx, values, entry.sorted)
                     }
@@ -351,14 +374,10 @@ impl DataFrame {
             Operation::Sort(ref col_names) => {
                 let mut parent_sorting: Option<Vec<usize>> = None;
                 for col_name in col_names {
-                    let col_idx = parent.pool_indices.get(col_name).expect(&format!(
-                        "Column missing in pool_indices: filter col => {}",
-                        col_name
-                    ));
-                    let entry = pool.get_entry(col_idx).expect(&format!(
-                        "Entry missing in pool: filter col idx {}",
-                        col_idx
-                    ));
+                    let col_idx = parent.pool_indices.get(col_name).ok_or_else(|| {
+                        Error::MissingColumnInIndices(col_name.to_string())
+                    })?;
+                    let entry = pool.get_entry(col_idx)?;
                     let (sort_indices, values) =
                         entry.values.sort(
                             &parent_sorting.as_ref().map(|s| s.as_slice()),
@@ -377,14 +396,10 @@ impl DataFrame {
                             &HashSet::from_iter(self.schema.columns.keys()) -
                                 &HashSet::from_iter(col_names);
                         for col_name in missing {
-                            let col_idx = parent.pool_indices.get(col_name).expect(&format!(
-                                "Column missing in pool_indices: filter col => {}",
-                                col_name
-                            ));
-                            let entry = pool.get_entry(col_idx).expect(&format!(
-                                "Entry missing in pool: filter col idx {}",
-                                col_idx
-                            ));
+                            let col_idx = parent.pool_indices.get(col_name).ok_or_else(|| {
+                                Error::MissingColumnInIndices(col_name.to_string())
+                            })?;
+                            let entry = pool.get_entry(col_idx)?;
                             let (_, values) =
                                 entry.values.sort(
                                     &parent_sorting.as_ref().map(|s| s.as_slice()),
@@ -397,24 +412,22 @@ impl DataFrame {
                             );
                         }
                     }
-                    None => panic!("Sorting with no sort columns"),
+                    None => return Err(Error::SortingWithNoSortColumns),
                 }
             }
             Operation::Aggregation(ref aggregators) => {
                 for (col_name, idx) in &parent.pool_indices {
                     let aggregator = &aggregators[col_name];
                     let new_idx = operation.hash_from_seed(idx, col_name);
-                    let entry = pool.get_entry(idx).expect(&format!(
-                        "Parent entry missing: {}",
-                        col_name
-                    ));
+                    let entry = pool.get_entry(idx)?;
                     pool.set_values(
                         new_idx,
-                        Values::from(aggregator.aggregate(entry.values)),
+                        Values::from(aggregator.aggregate(entry.values)?),
                         true,
                     )
                 }
             }
         }
+        Ok(())
     }
 }
