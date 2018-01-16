@@ -27,7 +27,10 @@ fn examples() -> Result<(), dataframe::Error> {
 
     let df = DataFrame::new(&mut pool, schema, values);
 
-    let filter_df = df.filter("bool", Predicate::new(Comparator::Equal, Value::from(true)))?;
+    let filter_df = df.filter(
+        "bool",
+        Predicate::new(Comparator::Equal, Value::from(true)),
+    )?;
     let select_df = filter_df.select(&["int"])?;
     println!("{:?}", select_df.collect(&mut pool)?);
 
@@ -54,6 +57,6 @@ fn examples() -> Result<(), dataframe::Error> {
 fn main() {
     match examples() {
         Ok(_) => (),
-        Err(error) => println!("Error: {}", error)
+        Err(error) => println!("Error: {}", error),
     }
 }

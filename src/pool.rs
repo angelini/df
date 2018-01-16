@@ -43,6 +43,7 @@ impl Pool {
             Some(&Values::Int(ref values)) => values.len(),
             Some(&Values::Float(ref values)) => values.len(),
             Some(&Values::String(ref values)) => values.len(),
+            Some(&Values::List(ref values)) => values.len(),
             None => 0,
         }
     }
@@ -75,6 +76,7 @@ impl Pool {
             Some(&Values::String(ref values)) => {
                 Self::get_clone(values.as_ref(), row_idx).map(Value::String)
             }
+            Some(&Values::List(ref values)) => unimplemented!(),
             None => None,
         }
     }

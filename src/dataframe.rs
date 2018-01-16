@@ -18,7 +18,9 @@ impl fmt::Display for AggregateError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             AggregateError::EmptyColumn => write!(f, "Aggregate on empty column"),
-            AggregateError::SumOnInvalidType(type_) => write!(f, "Sum aggregate on {:?} column", type_),
+            AggregateError::SumOnInvalidType(ref type_) => {
+                write!(f, "Sum aggregate on {:?} column", type_)
+            }
         }
     }
 }
@@ -55,7 +57,9 @@ impl From<value::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::MissingColumnInIndices(ref col_name) => write!(f, "Missing column in indices {}", col_name),
+            Error::MissingColumnInIndices(ref col_name) => {
+                write!(f, "Missing column in indices {}", col_name)
+            }
             Error::SortingWithNoSortColumns => write!(f, "Sort called without any sort columns"),
             Error::Aggregate(ref error) => write!(f, "{}", error),
             Error::Pool(ref error) => write!(f, "{}", error),
@@ -91,7 +95,7 @@ impl Schema {
     pub fn new(names: &[&str], types: &[Type]) -> Schema {
         let mut columns = BTreeMap::new();
         for (idx, name) in names.iter().enumerate() {
-            columns.insert(name.to_string(), Column::new(types[idx]));
+            columns.insert(name.to_string(), Column::new(types[idx].clone()));
         }
         Schema { columns }
     }
@@ -122,10 +126,10 @@ impl Aggregator {
                 if input_type == &Type::Int {
                     Ok(Type::Int)
                 } else {
-                    Err(AggregateError::SumOnInvalidType(*input_type))
+                    Err(AggregateError::SumOnInvalidType(input_type.clone()))
                 }
             }
-            Aggregator::First | Aggregator::Max | Aggregator::Min => Ok(*input_type),
+            Aggregator::First | Aggregator::Max | Aggregator::Min => Ok(input_type.clone()),
         }
     }
 
@@ -137,12 +141,16 @@ impl Aggregator {
                     Values::Int(values) => Value::Int(Self::first(&values)?),
                     Values::Float(values) => Value::Float(Self::first(&values)?),
                     Values::String(values) => Value::String(Self::first(&values)?),
+                    Values::List(_) => unimplemented!(),
                 }
             }
             Aggregator::Sum => {
                 match input {
                     Values::Int(values) => Value::Int(values.iter().fold(0, |acc, &v| acc + v)),
-                    Values::Float(values) => Value::Float(values.iter().fold(R64::from_inner(0.0), |acc, &v| acc + v)),
+                    Values::Float(values) => Value::Float(values.iter().fold(
+                        R64::from_inner(0.0),
+                        |acc, &v| acc + v,
+                    )),
                     _ => return Err(AggregateError::SumOnInvalidType(input.type_())),
                 }
             }
@@ -152,6 +160,7 @@ impl Aggregator {
                     Values::Int(values) => Value::Int(Self::max(&values)?),
                     Values::Float(values) => Value::Float(Self::max(&values)?),
                     Values::String(values) => Value::String(Self::max(&values)?),
+                    Values::List(_) => unimplemented!(),
                 }
             }
             Aggregator::Min => {
@@ -160,6 +169,7 @@ impl Aggregator {
                     Values::Int(values) => Value::Int(Self::min(&values)?),
                     Values::Float(values) => Value::Float(Self::min(&values)?),
                     Values::String(values) => Value::String(Self::min(&values)?),
+                    Values::List(_) => unimplemented!(),
                 }
             }
         })

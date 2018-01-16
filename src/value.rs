@@ -11,19 +11,27 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::PredicateAndValueTypes(predicate_type, value_type) => write!(f, "Predicate type ({:?}) and value type ({:?}) mismatch", predicate_type, value_type),
+            Error::PredicateAndValueTypes(ref predicate_type, ref value_type) => {
+                write!(
+                    f,
+                    "Predicate type ({:?}) and value type ({:?}) mismatch",
+                    predicate_type,
+                    value_type
+                )
+            }
         }
     }
 }
 
 type Result<T> = result::Result<T, Error>;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     Boolean,
     Int,
     Float,
     String,
+    List(Box<Type>),
 }
 
 #[derive(Clone, Debug, Hash)]
@@ -69,12 +77,63 @@ impl From<String> for Value {
     }
 }
 
+fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
+    values
+        .iter()
+        .enumerate()
+        .filter(|&(k, _)| indices.contains(&k))
+        .map(|(_, v)| v.clone())
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+pub enum ListValues {
+    Boolean(Vec<Vec<bool>>),
+    Int(Vec<Vec<u64>>),
+    Float(Vec<Vec<R64>>),
+    String(Vec<Vec<String>>),
+}
+
+impl ListValues {
+    pub fn type_(&self) -> Type {
+        match *self {
+            ListValues::Boolean(_) => Type::Boolean,
+            ListValues::Int(_) => Type::Int,
+            ListValues::Float(_) => Type::Float,
+            ListValues::String(_) => Type::String,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match *self {
+            ListValues::Boolean(ref values) => values.len(),
+            ListValues::Int(ref values) => values.len(),
+            ListValues::Float(ref values) => values.len(),
+            ListValues::String(ref values) => values.len(),
+        }
+    }
+
+    pub fn select_by_idx(&self, indices: &[usize]) -> ListValues {
+        match *self {
+            ListValues::Boolean(ref values) => ListValues::Boolean(
+                gen_select_by_idx(values, indices),
+            ),
+            ListValues::Int(ref values) => ListValues::Int(gen_select_by_idx(values, indices)),
+            ListValues::Float(ref values) => ListValues::Float(gen_select_by_idx(values, indices)),
+            ListValues::String(ref values) => ListValues::String(
+                gen_select_by_idx(values, indices),
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Values {
     Boolean(Rc<Vec<bool>>),
     Int(Rc<Vec<u64>>),
     Float(Rc<Vec<R64>>),
     String(Rc<Vec<String>>),
+    List(Rc<ListValues>),
 }
 
 impl Values {
@@ -84,15 +143,17 @@ impl Values {
             Values::Int(_) => Type::Int,
             Values::Float(_) => Type::Float,
             Values::String(_) => Type::String,
+            Values::List(ref list) => list.type_(),
         }
     }
 
     pub fn select_by_idx(&self, indices: &[usize]) -> Values {
         match *self {
-            Values::Boolean(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
-            Values::Int(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
-            Values::Float(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
-            Values::String(ref values) => Values::from(Self::gen_select_by_idx(values, indices)),
+            Values::Boolean(ref values) => Values::from(gen_select_by_idx(values, indices)),
+            Values::Int(ref values) => Values::from(gen_select_by_idx(values, indices)),
+            Values::Float(ref values) => Values::from(gen_select_by_idx(values, indices)),
+            Values::String(ref values) => Values::from(gen_select_by_idx(values, indices)),
+            Values::List(ref values) => Values::from(values.select_by_idx(indices)),
         }
     }
 
@@ -122,16 +183,8 @@ impl Values {
                     Self::gen_sort(values, parent_sorting, only_use_parent);
                 (indices, Values::from(sorted_values))
             }
+            Values::List(_) => unimplemented!(),
         }
-    }
-
-    fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
-        values
-            .iter()
-            .enumerate()
-            .filter(|&(k, _)| indices.contains(&k))
-            .map(|(_, v)| v.clone())
-            .collect()
     }
 
     fn gen_sort<T: Clone + Ord>(
@@ -182,6 +235,12 @@ impl From<Vec<R64>> for Values {
 impl From<Vec<String>> for Values {
     fn from(values: Vec<String>) -> Self {
         Values::String(Rc::new(values))
+    }
+}
+
+impl From<ListValues> for Values {
+    fn from(values: ListValues) -> Self {
+        Values::List(Rc::new(values))
     }
 }
 
@@ -246,11 +305,16 @@ impl Predicate {
                 let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
                 Ok((indices, Values::from(filtered_values)))
             }
+            (&Values::List(ref values), list_values) => unimplemented!(),
             (values, value) => Err(Error::PredicateAndValueTypes(values.type_(), value.type_())),
         }
     }
 
-    fn gen_filter<T: Clone + Ord>(comparator: &Comparator, values: &[T], value: &T) -> (Vec<usize>, Vec<T>) {
+    fn gen_filter<T: Clone + Ord>(
+        comparator: &Comparator,
+        values: &[T],
+        value: &T,
+    ) -> (Vec<usize>, Vec<T>) {
         let filtered = values
             .iter()
             .enumerate()
