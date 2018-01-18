@@ -29,8 +29,10 @@ type AggregateResult<T> = result::Result<T, AggregateError>;
 
 #[derive(Debug)]
 pub enum Error {
+    MissingAggregates(Vec<String>),
     MissingColumnInIndices(String),
     SortingWithNoSortColumns,
+    EmptyIndices,
     Aggregate(AggregateError),
     Pool(pool::Error),
     Value(value::Error),
@@ -57,10 +59,14 @@ impl From<value::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            Error::MissingAggregates(ref col_names) => {
+                write!(f, "Missing aggregates for {:?}", col_names)
+            }
             Error::MissingColumnInIndices(ref col_name) => {
                 write!(f, "Missing column in indices {}", col_name)
             }
             Error::SortingWithNoSortColumns => write!(f, "Sort called without any sort columns"),
+            Error::EmptyIndices => write!(f, "Empty pool indices"),
             Error::Aggregate(ref error) => write!(f, "{}", error),
             Error::Pool(ref error) => write!(f, "{}", error),
             Error::Value(ref error) => write!(f, "{}", error),
@@ -203,6 +209,7 @@ enum Operation {
     Filter(String, Predicate),
     Sort(Vec<String>),
     Aggregation(BTreeMap<String, Aggregator>),
+    GroupBy(Vec<String>),
 }
 
 impl Operation {
@@ -254,14 +261,8 @@ impl DataFrame {
 
     pub fn filter(&self, filter_column_name: &str, predicate: Predicate) -> Result<DataFrame> {
         let operation = Operation::Filter(filter_column_name.to_string(), predicate);
-        let pool_indices = self.pool_indices
-            .iter()
-            .map(|(col_name, idx)| {
-                (col_name.clone(), operation.hash_from_seed(idx, col_name))
-            })
-            .collect();
         Ok(DataFrame {
-            pool_indices,
+            pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
@@ -270,26 +271,22 @@ impl DataFrame {
 
     pub fn sort(&self, column_names: &[&str]) -> Result<DataFrame> {
         let operation = Operation::Sort(column_names.iter().map(|s| s.to_string()).collect());
-        let pool_indices = self.pool_indices
-            .iter()
-            .map(|(col_name, idx)| {
-                (col_name.clone(), operation.hash_from_seed(idx, col_name))
-            })
-            .collect();
         Ok(DataFrame {
-            pool_indices,
+            pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
         })
     }
 
-    pub fn aggregate(&self, aggregators: BTreeMap<String, Aggregator>) -> Result<DataFrame> {
+    pub fn aggregate(&self, aggregators: &BTreeMap<String, Aggregator>) -> Result<DataFrame> {
         {
             let missing: HashSet<&String> = &HashSet::from_iter(self.schema.columns.keys()) -
                 &HashSet::from_iter(aggregators.keys());
             if !missing.is_empty() {
-                panic!(format!("Missing aggregates for columns: {:?}", missing))
+                return Err(Error::MissingAggregates(
+                    missing.iter().map(|s| s.to_string()).collect(),
+                ));
             }
         }
         let columns = self.schema
@@ -303,17 +300,35 @@ impl DataFrame {
                 ))
             })
             .collect::<Result<BTreeMap<String, Column>>>()?;
-        let operation = Operation::Aggregation(aggregators);
-        let pool_indices = self.pool_indices
-            .iter()
-            .map(|(col_name, idx)| {
-                (col_name.clone(), operation.hash_from_seed(idx, col_name))
-            })
-            .collect();
+        let operation = Operation::Aggregation(aggregators.clone());
         Ok(DataFrame {
-            pool_indices,
+            pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: Schema { columns },
             parent: Some(Box::new(self.clone())),
+            operation: Some(operation),
+        })
+    }
+
+    pub fn group_by(&self, column_names: &[&str]) -> Result<DataFrame> {
+        let sorted = self.sort(column_names)?;
+        let operation = Operation::GroupBy(column_names.iter().map(|s| s.to_string()).collect());
+        let columns = sorted
+            .schema
+            .columns
+            .iter()
+            .map(|(name, column)| if column_names.contains(&name.as_str()) {
+                (name.clone(), column.clone())
+            } else {
+                (
+                    name.clone(),
+                    Column::new(Type::List(Box::new(column.type_.clone()))),
+                )
+            })
+            .collect::<BTreeMap<String, Column>>();
+        Ok(DataFrame {
+            pool_indices: Self::new_indices(&operation, &sorted.pool_indices),
+            schema: Schema { columns },
+            parent: Some(Box::new(sorted.clone())),
             operation: Some(operation),
         })
     }
@@ -325,10 +340,10 @@ impl DataFrame {
 
         let mut row_idx = 0;
         let mut rows = vec![];
-        let result_size = pool.len(self.pool_indices.values().nth(0).expect(
-            "Empty pool_indices",
-        )) as u64;
-
+        let result_size = pool.len(
+            self.pool_indices.values().nth(0).ok_or(Error::EmptyIndices)?,
+        ) as u64;
+        
         loop {
             if row_idx == result_size {
                 return Ok(rows);
@@ -339,7 +354,12 @@ impl DataFrame {
                 let value = match (&column.type_, pool.get_value(&col_idx, &row_idx)) {
                     (&Type::Boolean, Some(value @ Value::Boolean(_))) |
                     (&Type::Int, Some(value @ Value::Int(_))) |
-                    (&Type::String, Some(value @ Value::String(_))) => value,
+                    (&Type::Float, Some(value @ Value::Float(_))) |
+                    (&Type::String, Some(value @ Value::String(_))) |
+                    (&Type::List(box Type::Boolean), Some(value @ Value::BooleanList(_))) |
+                    (&Type::List(box Type::Int), Some(value @ Value::IntList(_))) |
+                    (&Type::List(box Type::Float), Some(value @ Value::FloatList(_))) |
+                    (&Type::List(box Type::String), Some(value @ Value::StringList(_))) => value,
                     (_, None) => {
                         panic!(format!(
                             "Missing value: col => {:?}, row => {:?}",
@@ -379,23 +399,17 @@ impl DataFrame {
         match *operation {
             Operation::Select(_) => {
                 for (col_name, idx) in &self.pool_indices {
-                    let parent_idx = parent.pool_indices.get(col_name).ok_or_else(|| {
-                        Error::MissingColumnInIndices(col_name.to_string())
-                    })?;
-                    let parent_entry = pool.get_entry(parent_idx)?;
+                    let parent_idx = parent.get_idx(col_name)?;
+                    let parent_entry = pool.get_entry(&parent_idx)?;
                     pool.set_values(*idx, parent_entry.values, parent_entry.sorted)
                 }
             }
             Operation::Filter(ref filter_col_name, ref predicate) => {
-                let filter_col_idx = parent.pool_indices.get(filter_col_name).ok_or_else(|| {
-                    Error::MissingColumnInIndices(filter_col_name.to_string())
-                })?;
-
-                let filter_entry = pool.get_entry(filter_col_idx)?;
-
+                let filter_col_idx = parent.get_idx(filter_col_name)?;
+                let filter_entry = pool.get_entry(&filter_col_idx)?;
                 let (filter_pass_idxs, filtered_values) = predicate.filter(&filter_entry.values)?;
                 pool.set_values(
-                    operation.hash_from_seed(filter_col_idx, filter_col_name),
+                    operation.hash_from_seed(&filter_col_idx, filter_col_name),
                     filtered_values,
                     filter_entry.sorted,
                 );
@@ -412,17 +426,15 @@ impl DataFrame {
             Operation::Sort(ref col_names) => {
                 let mut parent_sorting: Option<Vec<usize>> = None;
                 for col_name in col_names {
-                    let col_idx = parent.pool_indices.get(col_name).ok_or_else(|| {
-                        Error::MissingColumnInIndices(col_name.to_string())
-                    })?;
-                    let entry = pool.get_entry(col_idx)?;
+                    let col_idx = parent.get_idx(col_name)?;
+                    let entry = pool.get_entry(&col_idx)?;
                     let (sort_indices, values) =
                         entry.values.sort(
                             &parent_sorting.as_ref().map(|s| s.as_slice()),
                             false,
                         );
                     pool.set_values(
-                        operation.hash_from_seed(col_idx, col_name),
+                        operation.hash_from_seed(&col_idx, col_name),
                         values,
                         parent_sorting.is_none(),
                     );
@@ -434,17 +446,15 @@ impl DataFrame {
                             &HashSet::from_iter(self.schema.columns.keys()) -
                                 &HashSet::from_iter(col_names);
                         for col_name in missing {
-                            let col_idx = parent.pool_indices.get(col_name).ok_or_else(|| {
-                                Error::MissingColumnInIndices(col_name.to_string())
-                            })?;
-                            let entry = pool.get_entry(col_idx)?;
+                            let idx = parent.get_idx(col_name)?;
+                            let entry = pool.get_entry(&idx)?;
                             let (_, values) =
                                 entry.values.sort(
                                     &parent_sorting.as_ref().map(|s| s.as_slice()),
                                     true,
                                 );
                             pool.set_values(
-                                operation.hash_from_seed(col_idx, col_name),
+                                operation.hash_from_seed(&idx, col_name),
                                 values,
                                 false,
                             );
@@ -465,7 +475,57 @@ impl DataFrame {
                     )
                 }
             }
+            Operation::GroupBy(ref col_names) => {
+                let mut len = 0;
+                let mut group_columns = vec![];
+                for col_name in col_names {
+                    let parent_idx = parent.get_idx(col_name)?;
+                    let parent_entry = pool.get_entry(&parent_idx)?;
+                    len = parent_entry.values.len();
+                    group_columns.push(parent_entry.values);
+                }
+
+                let mut group_offsets = vec![];
+                for row_idx in 0..(len - 1) {
+                    for group_col_values in &group_columns {
+                        if !group_col_values.equal_at_idxs(row_idx, row_idx + 1) {
+                            group_offsets.push(row_idx + 1);
+                            continue;
+                        }
+                    }
+                }
+
+                for col_name in self.schema.columns.keys() {
+                    let parent_idx = parent.get_idx(col_name)?;
+                    let parent_entry = pool.get_entry(&parent_idx)?;
+                    let idx = self.get_idx(col_name)?;
+                    if col_names.contains(col_name) {
+                        pool.set_values(idx, parent_entry.values.group_to_value(&group_offsets), false);
+                    } else {
+                        pool.set_values(idx, parent_entry.values.group_by(&group_offsets), false);
+                    }
+                }
+            }
         }
         Ok(())
+    }
+
+    fn get_idx(&self, col_name: &str) -> Result<u64> {
+        self.pool_indices
+            .get(col_name)
+            .ok_or_else(|| Error::MissingColumnInIndices(col_name.to_string()))
+            .map(|idx| *idx)
+    }
+
+    fn new_indices(
+        operation: &Operation,
+        indices: &BTreeMap<String, u64>,
+    ) -> BTreeMap<String, u64> {
+        indices
+            .iter()
+            .map(|(col_name, idx)| {
+                (col_name.clone(), operation.hash_from_seed(idx, col_name))
+            })
+            .collect()
     }
 }

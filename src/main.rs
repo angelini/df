@@ -1,4 +1,4 @@
-#![feature(plugin)]
+#![feature(box_syntax, box_patterns, plugin)]
 
 #![plugin(clippy)]
 
@@ -21,9 +21,9 @@ fn examples() -> Result<(), dataframe::Error> {
     let mut values = HashMap::new();
     values.insert(
         "bool".to_string(),
-        Values::from(vec![false, true, false, true]),
+        Values::from(vec![false, true, false, true, false, false]),
     );
-    values.insert("int".to_string(), Values::from(vec![4, 3, 2, 1]));
+    values.insert("int".to_string(), Values::from(vec![4, 3, 2, 1, 1, 1]));
 
     let df = DataFrame::new(&mut pool, schema, values);
 
@@ -36,21 +36,25 @@ fn examples() -> Result<(), dataframe::Error> {
 
     let mut aggregators = BTreeMap::new();
     aggregators.insert("int".to_string(), Aggregator::First);
-    let first_df = select_df.aggregate(aggregators)?;
+    let first_df = select_df.aggregate(&aggregators)?;
     println!("{:?}", first_df.collect(&mut pool)?);
 
     let mut aggregators = BTreeMap::new();
     aggregators.insert("int".to_string(), Aggregator::Max);
-    let max_df = select_df.aggregate(aggregators)?;
+    let max_df = select_df.aggregate(&aggregators)?;
     println!("{:?}", max_df.collect(&mut pool)?);
 
     let mut aggregators = BTreeMap::new();
     aggregators.insert("int".to_string(), Aggregator::Sum);
-    let sum_df = select_df.aggregate(aggregators)?;
+    let sum_df = select_df.aggregate(&aggregators)?;
     println!("{:?}", sum_df.collect(&mut pool)?);
 
     let sort_df = df.sort(&["int"])?;
     println!("{:?}", sort_df.collect(&mut pool)?);
+
+    let group_df = df.group_by(&["int"])?;
+    println!("{:?}", group_df.collect(&mut pool)?);
+
     Ok(())
 }
 

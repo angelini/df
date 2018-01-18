@@ -34,12 +34,16 @@ pub enum Type {
     List(Box<Type>),
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Value {
     Boolean(bool),
     Int(u64),
     Float(R64),
     String(String),
+    BooleanList(Vec<bool>),
+    IntList(Vec<u64>),
+    FloatList(Vec<R64>),
+    StringList(Vec<String>),
 }
 
 impl Value {
@@ -49,6 +53,10 @@ impl Value {
             Value::Int(_) => Type::Int,
             Value::Float(_) => Type::Float,
             Value::String(_) => Type::String,
+            Value::BooleanList(_) => Type::List(box Type::Boolean),
+            Value::IntList(_) => Type::List(box Type::Int),
+            Value::FloatList(_) => Type::List(box Type::Float),
+            Value::StringList(_) => Type::List(box Type::String),
         }
     }
 }
@@ -74,6 +82,30 @@ impl From<R64> for Value {
 impl From<String> for Value {
     fn from(value: String) -> Self {
         Value::String(value)
+    }
+}
+
+impl From<Vec<bool>> for Value {
+    fn from(value: Vec<bool>) -> Self {
+        Value::BooleanList(value)
+    }
+}
+
+impl From<Vec<u64>> for Value {
+    fn from(value: Vec<u64>) -> Self {
+        Value::IntList(value)
+    }
+}
+
+impl From<Vec<R64>> for Value {
+    fn from(value: Vec<R64>) -> Self {
+        Value::FloatList(value)
+    }
+}
+
+impl From<Vec<String>> for Value {
+    fn from(value: Vec<String>) -> Self {
+        Value::StringList(value)
     }
 }
 
@@ -147,6 +179,16 @@ impl Values {
         }
     }
 
+    pub fn len(&self) -> usize {
+        match *self {
+            Values::Boolean(ref values) => values.len(),
+            Values::Int(ref values) => values.len(),
+            Values::Float(ref values) => values.len(),
+            Values::String(ref values) => values.len(),
+            Values::List(ref values) => values.len(),
+        }
+    }
+
     pub fn select_by_idx(&self, indices: &[usize]) -> Values {
         match *self {
             Values::Boolean(ref values) => Values::from(gen_select_by_idx(values, indices)),
@@ -187,6 +229,52 @@ impl Values {
         }
     }
 
+    pub fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
+        match *self {
+            Values::Boolean(ref values) => values[left] == values[right],
+            Values::Int(ref values) => values[left] == values[right],
+            Values::Float(ref values) => values[left] == values[right],
+            Values::String(ref values) => values[left] == values[right],
+            Values::List(ref values) => unimplemented!(),
+        }
+    }
+
+    pub fn group_by(&self, group_offsets: &[usize]) -> Values {
+        match *self {
+            Values::Boolean(ref values) => Values::from(ListValues::Boolean(
+                Self::gen_group_by(values, group_offsets),
+            )),
+            Values::Int(ref values) => Values::from(
+                ListValues::Int(Self::gen_group_by(values, group_offsets)),
+            ),
+            Values::Float(ref values) => Values::from(ListValues::Float(
+                Self::gen_group_by(values, group_offsets),
+            )),
+            Values::String(ref values) => Values::from(ListValues::String(
+                Self::gen_group_by(values, group_offsets),
+            )),
+            Values::List(ref values) => unimplemented!(),
+        }
+    }
+
+    pub fn group_to_value(&self, group_offsets: &[usize]) -> Values {
+        match *self {
+            Values::Boolean(ref values) => Values::from(
+                Self::gen_group_to_value(values, group_offsets),
+            ),
+            Values::Int(ref values) => Values::from(
+                Self::gen_group_to_value(values, group_offsets),
+            ),
+            Values::Float(ref values) => Values::from(
+                Self::gen_group_to_value(values, group_offsets),
+            ),
+            Values::String(ref values) => Values::from(
+                Self::gen_group_to_value(values, group_offsets),
+            ),
+            Values::List(ref values) => unimplemented!(),
+        }
+    }
+
     fn gen_sort<T: Clone + Ord>(
         values: &[T],
         parent_sorting: &Option<&[usize]>,
@@ -211,6 +299,39 @@ impl Values {
             sorted.iter().map(|&(k, _)| k).collect(),
             sorted.into_iter().map(|(_, v)| v.clone()).collect(),
         )
+    }
+
+    fn gen_group_by<T: Clone>(values: &[T], group_offsets: &[usize]) -> Vec<Vec<T>> {
+        let mut offset_index = 0;
+        let mut outer = vec![];
+        let mut inner = vec![];
+        for (idx, value) in values.iter().enumerate() {
+            if offset_index < group_offsets.len() && idx == group_offsets[offset_index] {
+                outer.push(inner);
+                inner = vec![];
+                offset_index += 1;
+            }
+            inner.push(value.clone())
+        }
+        outer.push(inner);
+        outer
+    }
+
+    fn gen_group_to_value<T: Clone>(values: &[T], group_offsets: &[usize]) -> Vec<T> {
+        let mut offset_index = 0;
+        let mut result = vec![];
+        for (idx, value) in values.iter().enumerate() {
+            if idx == 0 {
+                result.push(value.clone());
+            } else if offset_index == group_offsets.len() {
+                result.push(value.clone());
+                return result;
+            } else if idx == group_offsets[offset_index] {
+                result.push(value.clone());
+                offset_index += 1;
+            }
+        }
+        result
     }
 }
 
@@ -251,6 +372,10 @@ impl From<Value> for Values {
             Value::Int(value) => Values::Int(Rc::new(vec![value])),
             Value::Float(value) => Values::Float(Rc::new(vec![value])),
             Value::String(value) => Values::String(Rc::new(vec![value])),
+            Value::BooleanList(value) => Values::List(Rc::new(ListValues::Boolean(vec![value]))),
+            Value::IntList(value) => Values::List(Rc::new(ListValues::Int(vec![value]))),
+            Value::FloatList(value) => Values::List(Rc::new(ListValues::Float(vec![value]))),
+            Value::StringList(value) => Values::List(Rc::new(ListValues::String(vec![value]))),
         }
     }
 }

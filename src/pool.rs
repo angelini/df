@@ -2,7 +2,7 @@ use rand::{self, Rng};
 use std::collections::HashMap;
 use std::fmt;
 use std::result;
-use value::{Value, Values};
+use value::{ListValues, Value, Values};
 
 #[derive(Debug)]
 pub enum Error {
@@ -31,7 +31,7 @@ impl Entry {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Pool {
     entries: HashMap<u64, Entry>,
 }
@@ -76,7 +76,22 @@ impl Pool {
             Some(&Values::String(ref values)) => {
                 Self::get_clone(values.as_ref(), row_idx).map(Value::String)
             }
-            Some(&Values::List(ref values)) => unimplemented!(),
+            Some(&Values::List(ref list_values)) => {
+                match *list_values.as_ref() {
+                    ListValues::Boolean(ref values) => {
+                        Self::get_clone(values, row_idx).map(Value::BooleanList)
+                    }
+                    ListValues::Int(ref values) => {
+                        Self::get_clone(values, row_idx).map(Value::IntList)
+                    }
+                    ListValues::Float(ref values) => {
+                        Self::get_clone(values, row_idx).map(Value::FloatList)
+                    }
+                    ListValues::String(ref values) => {
+                        Self::get_clone(values, row_idx).map(Value::StringList)
+                    }
+                }
+            }
             None => None,
         }
     }
