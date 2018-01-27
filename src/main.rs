@@ -14,18 +14,34 @@ use pool::Pool;
 use std::collections::{BTreeMap, HashMap};
 use value::{Comparator, Predicate, Type, Value, Values};
 
+macro_rules! agg {
+    ( $( $c:expr, $a:expr ),* ) => {{
+        let mut aggregators = BTreeMap::new();
+        $(
+            aggregators.insert($c.to_string(), $a);
+        )*
+        aggregators
+    }};
+}
+
+macro_rules! values {
+    ( $( $c:expr, $v:expr ),* ) => {{
+        let mut values = HashMap::new();
+        $(
+            values.insert($c.to_string(), Values::from($v));
+        )*
+        values
+    }};
+}
+
 fn examples() -> Result<(), dataframe::Error> {
     let mut pool = Pool::default();
     let schema = Schema::new(&["bool", "int"], &[Type::Boolean, Type::Int]);
 
-    let mut values = HashMap::new();
-    values.insert(
-        "bool".to_string(),
-        Values::from(vec![false, true, false, true, false, false]),
-    );
-    values.insert("int".to_string(), Values::from(vec![4, 3, 2, 1, 1, 1]));
-
-    let df = DataFrame::new(&mut pool, schema, values);
+    let df = DataFrame::new(&mut pool, schema, values!(
+        "bool", vec![false, true, false, true, false, false],
+        "int", vec![4, 3, 2, 1, 1, 1]
+    ));
 
     let filter_df = df.filter(
         "bool",
@@ -34,19 +50,13 @@ fn examples() -> Result<(), dataframe::Error> {
     let select_df = filter_df.select(&["int"])?;
     println!("{:?}", select_df.collect(&mut pool)?);
 
-    let mut aggregators = BTreeMap::new();
-    aggregators.insert("int".to_string(), Aggregator::First);
-    let first_df = select_df.aggregate(&aggregators)?;
+    let first_df = select_df.aggregate(&agg!("int", Aggregator::First))?;
     println!("{:?}", first_df.collect(&mut pool)?);
 
-    let mut aggregators = BTreeMap::new();
-    aggregators.insert("int".to_string(), Aggregator::Max);
-    let max_df = select_df.aggregate(&aggregators)?;
+    let max_df = select_df.aggregate(&agg!("int", Aggregator::Max))?;
     println!("{:?}", max_df.collect(&mut pool)?);
 
-    let mut aggregators = BTreeMap::new();
-    aggregators.insert("int".to_string(), Aggregator::Sum);
-    let sum_df = select_df.aggregate(&aggregators)?;
+    let sum_df = select_df.aggregate(&agg!("int", Aggregator::Sum))?;
     println!("{:?}", sum_df.collect(&mut pool)?);
 
     let sort_df = df.sort(&["int"])?;
