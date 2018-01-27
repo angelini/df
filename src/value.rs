@@ -46,18 +46,31 @@ pub enum Value {
     StringList(Vec<String>),
 }
 
+macro_rules! value_type {
+    ( $v:expr, $( $t:ident, $l:ident ),* ) => {
+        match *$v {
+            $(
+                Value::$t(_) => Type::$t,
+                Value::$l(_) => Type::List(box Type::$t),
+            )*
+
+        }
+    };
+}
+
 impl Value {
     pub fn type_(&self) -> Type {
-        match *self {
-            Value::Boolean(_) => Type::Boolean,
-            Value::Int(_) => Type::Int,
-            Value::Float(_) => Type::Float,
-            Value::String(_) => Type::String,
-            Value::BooleanList(_) => Type::List(box Type::Boolean),
-            Value::IntList(_) => Type::List(box Type::Int),
-            Value::FloatList(_) => Type::List(box Type::Float),
-            Value::StringList(_) => Type::List(box Type::String),
-        }
+        value_type!(
+            self,
+            Boolean,
+            BooleanList,
+            Int,
+            IntList,
+            Float,
+            FloatList,
+            String,
+            StringList
+        )
     }
 }
 
@@ -126,6 +139,26 @@ pub enum ListValues {
     String(Vec<Vec<String>>),
 }
 
+macro_rules! list_select_by_idx {
+    ( $v:expr, $i:expr, $( $t:ident ),* ) => {
+        match *$v {
+            $(
+                ListValues::$t(ref values) => ListValues::$t(gen_select_by_idx(values, $i)),
+            )*
+        }
+    };
+}
+
+macro_rules! len {
+    ( $v:expr, $e:ident, $( $t:ident ),* ) => {
+        match *$v {
+            $(
+                $e::$t(ref values) => values.len(),
+            )*
+        }
+    };
+}
+
 impl ListValues {
     pub fn type_(&self) -> Type {
         match *self {
@@ -137,26 +170,59 @@ impl ListValues {
     }
 
     pub fn len(&self) -> usize {
-        match *self {
-            ListValues::Boolean(ref values) => values.len(),
-            ListValues::Int(ref values) => values.len(),
-            ListValues::Float(ref values) => values.len(),
-            ListValues::String(ref values) => values.len(),
-        }
+        len!(self, ListValues, Boolean, Int, Float, String)
     }
 
     pub fn select_by_idx(&self, indices: &[usize]) -> ListValues {
-        match *self {
-            ListValues::Boolean(ref values) => ListValues::Boolean(
-                gen_select_by_idx(values, indices),
-            ),
-            ListValues::Int(ref values) => ListValues::Int(gen_select_by_idx(values, indices)),
-            ListValues::Float(ref values) => ListValues::Float(gen_select_by_idx(values, indices)),
-            ListValues::String(ref values) => ListValues::String(
-                gen_select_by_idx(values, indices),
-            ),
-        }
+        list_select_by_idx!(self, indices, Boolean, Int, Float, String)
     }
+}
+
+macro_rules! select_by_idx {
+    ( $v:expr, $i:expr, $l:ident, $( $t:ident ),* ) => {
+        match *$v {
+            Values::$l(ref values) => Values::from(values.select_by_idx($i)),
+            $(
+                Values::$t(ref values) => Values::from(gen_select_by_idx(values, $i)),
+            )*
+        }
+    };
+}
+
+macro_rules! sort {
+    ( $v:expr, $p:expr, $o:expr, $l:ident, $( $t:ident ),* ) => {
+        match *$v {
+            Values::$l(ref values) => unimplemented!(),
+            $(
+                Values::$t(ref values) => {
+                    let (indices, sorted_values) = Values::gen_sort(values, $p, $o);
+                    (indices, Values::from(sorted_values))
+                }
+            )*
+        }
+    };
+}
+
+macro_rules! group_by {
+    ( $v:expr, $o:expr, $l:ident, $( $t:ident ),* ) => {
+        match *$v {
+            Values::$l(ref values) => unimplemented!(),
+            $(
+                Values::$t(ref values) => Values::from(ListValues::$t(Values::gen_group_by(values, $o))),
+            )*
+        }
+    };
+}
+
+macro_rules! group_to_value {
+    ( $v:expr, $o:expr, $l:ident, $( $t:ident ),* ) => {
+        match *$v {
+            Values::$l(ref values) => unimplemented!(),
+            $(
+                Values::$t(ref values) => Values::from(Values::gen_group_to_value(values, $o)),
+            )*
+        }
+    };
 }
 
 #[derive(Clone, Debug)]
@@ -180,23 +246,11 @@ impl Values {
     }
 
     pub fn len(&self) -> usize {
-        match *self {
-            Values::Boolean(ref values) => values.len(),
-            Values::Int(ref values) => values.len(),
-            Values::Float(ref values) => values.len(),
-            Values::String(ref values) => values.len(),
-            Values::List(ref values) => values.len(),
-        }
+        len!(self, Values, List, Boolean, Int, Float, String)
     }
 
     pub fn select_by_idx(&self, indices: &[usize]) -> Values {
-        match *self {
-            Values::Boolean(ref values) => Values::from(gen_select_by_idx(values, indices)),
-            Values::Int(ref values) => Values::from(gen_select_by_idx(values, indices)),
-            Values::Float(ref values) => Values::from(gen_select_by_idx(values, indices)),
-            Values::String(ref values) => Values::from(gen_select_by_idx(values, indices)),
-            Values::List(ref values) => Values::from(values.select_by_idx(indices)),
-        }
+        select_by_idx!(self, indices, List, Boolean, Int, Float, String)
     }
 
     pub fn sort(
@@ -204,29 +258,7 @@ impl Values {
         parent_sorting: &Option<&[usize]>,
         only_use_parent: bool,
     ) -> (Vec<usize>, Values) {
-        match *self {
-            Values::Boolean(ref values) => {
-                let (indices, sorted_values) =
-                    Self::gen_sort(values, parent_sorting, only_use_parent);
-                (indices, Values::from(sorted_values))
-            }
-            Values::Int(ref values) => {
-                let (indices, sorted_values) =
-                    Self::gen_sort(values, parent_sorting, only_use_parent);
-                (indices, Values::from(sorted_values))
-            }
-            Values::Float(ref values) => {
-                let (indices, sorted_values) =
-                    Self::gen_sort(values, parent_sorting, only_use_parent);
-                (indices, Values::from(sorted_values))
-            }
-            Values::String(ref values) => {
-                let (indices, sorted_values) =
-                    Self::gen_sort(values, parent_sorting, only_use_parent);
-                (indices, Values::from(sorted_values))
-            }
-            Values::List(_) => unimplemented!(),
-        }
+        sort!(self, parent_sorting, only_use_parent, List, Boolean, Int, Float, String)
     }
 
     pub fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
@@ -240,39 +272,11 @@ impl Values {
     }
 
     pub fn group_by(&self, group_offsets: &[usize]) -> Values {
-        match *self {
-            Values::Boolean(ref values) => Values::from(ListValues::Boolean(
-                Self::gen_group_by(values, group_offsets),
-            )),
-            Values::Int(ref values) => Values::from(
-                ListValues::Int(Self::gen_group_by(values, group_offsets)),
-            ),
-            Values::Float(ref values) => Values::from(ListValues::Float(
-                Self::gen_group_by(values, group_offsets),
-            )),
-            Values::String(ref values) => Values::from(ListValues::String(
-                Self::gen_group_by(values, group_offsets),
-            )),
-            Values::List(ref values) => unimplemented!(),
-        }
+        group_by!(self, group_offsets, List, Boolean, Int, Float, String)
     }
 
     pub fn group_to_value(&self, group_offsets: &[usize]) -> Values {
-        match *self {
-            Values::Boolean(ref values) => Values::from(
-                Self::gen_group_to_value(values, group_offsets),
-            ),
-            Values::Int(ref values) => Values::from(
-                Self::gen_group_to_value(values, group_offsets),
-            ),
-            Values::Float(ref values) => Values::from(
-                Self::gen_group_to_value(values, group_offsets),
-            ),
-            Values::String(ref values) => Values::from(
-                Self::gen_group_to_value(values, group_offsets),
-            ),
-            Values::List(ref values) => unimplemented!(),
-        }
+        group_to_value!(self, group_offsets, List, Boolean, Int, Float, String)
     }
 
     fn gen_sort<T: Clone + Ord>(
@@ -401,6 +405,21 @@ impl Comparator {
     }
 }
 
+macro_rules! filter {
+    ( $p:expr, $v:expr, $l:ident, $( $t:ident ),* ) => {
+        match ($v, &$p.value) {
+            $(
+                (&Values::$t(ref values), &Value::$t(ref value)) => {
+                    let (indices, filtered_values) = Predicate::gen_filter(&$p.comparator, values, value);
+                    Ok((indices, Values::from(filtered_values)))
+                }
+            )*
+            (&Values::$l(_), _) => unimplemented!(),
+            (values, value) => Err(Error::PredicateAndValueTypes(values.type_(), value.type_())),
+        }
+    };
+}
+
 #[derive(Clone, Hash)]
 pub struct Predicate {
     comparator: Comparator,
@@ -413,26 +432,7 @@ impl Predicate {
     }
 
     pub fn filter(&self, values: &Values) -> Result<(Vec<usize>, Values)> {
-        match (values, &self.value) {
-            (&Values::Boolean(ref values), &Value::Boolean(ref value)) => {
-                let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
-                Ok((indices, Values::from(filtered_values)))
-            }
-            (&Values::Int(ref values), &Value::Int(ref value)) => {
-                let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
-                Ok((indices, Values::from(filtered_values)))
-            }
-            (&Values::Float(ref values), &Value::Float(ref value)) => {
-                let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
-                Ok((indices, Values::from(filtered_values)))
-            }
-            (&Values::String(ref values), &Value::String(ref value)) => {
-                let (indices, filtered_values) = Self::gen_filter(&self.comparator, values, value);
-                Ok((indices, Values::from(filtered_values)))
-            }
-            (&Values::List(ref values), list_values) => unimplemented!(),
-            (values, value) => Err(Error::PredicateAndValueTypes(values.type_(), value.type_())),
-        }
+        filter!(self, values, List, Boolean, Int, Float, String)
     }
 
     fn gen_filter<T: Clone + Ord>(

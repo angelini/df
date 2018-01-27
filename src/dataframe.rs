@@ -117,6 +117,16 @@ impl Schema {
     }
 }
 
+macro_rules! simple_aggregate {
+    ( $i:expr, $f:ident, $l:ident, $( $t:ident ),* ) => {
+        match $i {
+            Values::$l(_) => unimplemented!(),
+            $(
+                Values::$t(values) => Value::$t(Aggregator::$f(&values)?),
+            )*
+        }
+    };
+}
 #[derive(Clone, Hash)]
 pub enum Aggregator {
     First,
@@ -142,13 +152,7 @@ impl Aggregator {
     fn aggregate(&self, input: Values) -> AggregateResult<Value> {
         Ok(match *self {
             Aggregator::First => {
-                match input {
-                    Values::Boolean(values) => Value::Boolean(Self::first(&values)?),
-                    Values::Int(values) => Value::Int(Self::first(&values)?),
-                    Values::Float(values) => Value::Float(Self::first(&values)?),
-                    Values::String(values) => Value::String(Self::first(&values)?),
-                    Values::List(_) => unimplemented!(),
-                }
+                simple_aggregate!(input, first, List, Boolean, Int, Float, String)
             }
             Aggregator::Sum => {
                 match input {
@@ -161,22 +165,10 @@ impl Aggregator {
                 }
             }
             Aggregator::Max => {
-                match input {
-                    Values::Boolean(values) => Value::Boolean(Self::max(&values)?),
-                    Values::Int(values) => Value::Int(Self::max(&values)?),
-                    Values::Float(values) => Value::Float(Self::max(&values)?),
-                    Values::String(values) => Value::String(Self::max(&values)?),
-                    Values::List(_) => unimplemented!(),
-                }
+                simple_aggregate!(input, max, List, Boolean, Int, Float, String)
             }
             Aggregator::Min => {
-                match input {
-                    Values::Boolean(values) => Value::Boolean(Self::min(&values)?),
-                    Values::Int(values) => Value::Int(Self::min(&values)?),
-                    Values::Float(values) => Value::Float(Self::min(&values)?),
-                    Values::String(values) => Value::String(Self::min(&values)?),
-                    Values::List(_) => unimplemented!(),
-                }
+                simple_aggregate!(input, min, List, Boolean, Int, Float, String)
             }
         })
     }

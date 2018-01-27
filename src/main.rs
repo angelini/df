@@ -1,4 +1,4 @@
-#![feature(box_syntax, box_patterns, plugin)]
+#![feature(box_syntax, box_patterns, concat_idents, plugin)]
 
 #![plugin(clippy)]
 

@@ -31,6 +31,28 @@ impl Entry {
     }
 }
 
+macro_rules! get_value {
+    ( $p:expr, $c:expr, $r:expr, $( $t:ident, $l:ident ),* ) => {
+        match $p.entries.get($c).map(|entry| &entry.values) {
+            $(
+                Some(&Values::$t(ref values)) => {
+                    Pool::get_clone(values.as_ref(), $r).map(Value::$t)
+                }
+            )*
+            Some(&Values::List(ref list_values)) => {
+                match *list_values.as_ref() {
+                    $(
+                        ListValues::$t(ref values) => {
+                            Pool::get_clone(values, $r).map(Value::$l)
+                        }
+                    )*
+                }
+            }
+            None => None
+        }
+    };
+}
+
 #[derive(Debug, Default)]
 pub struct Pool {
     entries: HashMap<u64, Entry>,
@@ -63,37 +85,7 @@ impl Pool {
     }
 
     pub fn get_value(&self, col_idx: &u64, row_idx: &u64) -> Option<Value> {
-        match self.entries.get(col_idx).map(|entry| &entry.values) {
-            Some(&Values::Boolean(ref values)) => {
-                Self::get_clone(values.as_ref(), row_idx).map(Value::Boolean)
-            }
-            Some(&Values::Int(ref values)) => {
-                Self::get_clone(values.as_ref(), row_idx).map(Value::Int)
-            }
-            Some(&Values::Float(ref values)) => {
-                Self::get_clone(values.as_ref(), row_idx).map(Value::Float)
-            }
-            Some(&Values::String(ref values)) => {
-                Self::get_clone(values.as_ref(), row_idx).map(Value::String)
-            }
-            Some(&Values::List(ref list_values)) => {
-                match *list_values.as_ref() {
-                    ListValues::Boolean(ref values) => {
-                        Self::get_clone(values, row_idx).map(Value::BooleanList)
-                    }
-                    ListValues::Int(ref values) => {
-                        Self::get_clone(values, row_idx).map(Value::IntList)
-                    }
-                    ListValues::Float(ref values) => {
-                        Self::get_clone(values, row_idx).map(Value::FloatList)
-                    }
-                    ListValues::String(ref values) => {
-                        Self::get_clone(values, row_idx).map(Value::StringList)
-                    }
-                }
-            }
-            None => None,
-        }
+        get_value!(self, col_idx, row_idx, Boolean, BooleanList, Int, IntList, Float, FloatList, String, StringList)
     }
 
     pub fn set_values(&mut self, idx: u64, values: Values, sorted: bool) {
