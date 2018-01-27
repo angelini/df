@@ -1,10 +1,11 @@
 use decorum::R64;
-use pool::{self, Pool};
+use pool::{self, Pool, RefCounts};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
+use std::rc::Rc;
 use std::result;
 use value::{self, Predicate, Type, Value, Values};
 
@@ -220,6 +221,7 @@ pub struct DataFrame {
     parent: Option<Box<DataFrame>>,
     operation: Option<Operation>,
     pool_indices: BTreeMap<String, u64>,
+    ref_counts: RefCounts,
 }
 
 impl DataFrame {
@@ -233,6 +235,7 @@ impl DataFrame {
             pool_indices,
             parent: None,
             operation: None,
+            ref_counts: pool.clone_ref_counts(),
         }
     }
 
@@ -248,6 +251,7 @@ impl DataFrame {
             schema: self.schema.select(column_names),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
+            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
@@ -258,6 +262,7 @@ impl DataFrame {
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
+            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
@@ -268,6 +273,7 @@ impl DataFrame {
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
+            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
@@ -298,6 +304,7 @@ impl DataFrame {
             schema: Schema { columns },
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
+            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
@@ -322,6 +329,7 @@ impl DataFrame {
             schema: Schema { columns },
             parent: Some(Box::new(sorted.clone())),
             operation: Some(operation),
+            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
@@ -366,6 +374,10 @@ impl DataFrame {
             rows.push(Row { values: row_values });
             row_idx += 1;
         }
+    }
+
+    pub fn print_indices(&self, name: &str) {
+        println!("{} -> {:?}", name, self.pool_indices)
     }
 
     fn should_materialize(&self, pool: &Pool) -> bool {
@@ -519,5 +531,17 @@ impl DataFrame {
                 (col_name.clone(), operation.hash_from_seed(idx, col_name))
             })
             .collect()
+    }
+}
+
+impl Drop for DataFrame {
+    fn drop(&mut self) {
+        let mut counts = self.ref_counts.borrow_mut();
+        for key in self.pool_indices.values() {
+            let count = counts.entry(*key).or_insert(0);
+            if *count != 0 {
+                *count -= 1;
+            }
+        }
     }
 }

@@ -192,7 +192,7 @@ macro_rules! select_by_idx {
 macro_rules! sort {
     ( $v:expr, $p:expr, $o:expr, $l:ident, $( $t:ident ),* ) => {
         match *$v {
-            Values::$l(ref values) => unimplemented!(),
+            Values::$l(_) => unimplemented!(),
             $(
                 Values::$t(ref values) => {
                     let (indices, sorted_values) = Values::gen_sort(values, $p, $o);
@@ -206,7 +206,7 @@ macro_rules! sort {
 macro_rules! group_by {
     ( $v:expr, $o:expr, $l:ident, $( $t:ident ),* ) => {
         match *$v {
-            Values::$l(ref values) => unimplemented!(),
+            Values::$l(_) => unimplemented!(),
             $(
                 Values::$t(ref values) => Values::from(ListValues::$t(Values::gen_group_by(values, $o))),
             )*
@@ -217,7 +217,7 @@ macro_rules! group_by {
 macro_rules! group_to_value {
     ( $v:expr, $o:expr, $l:ident, $( $t:ident ),* ) => {
         match *$v {
-            Values::$l(ref values) => unimplemented!(),
+            Values::$l(_) => unimplemented!(),
             $(
                 Values::$t(ref values) => Values::from(Values::gen_group_to_value(values, $o)),
             )*
@@ -267,7 +267,7 @@ impl Values {
             Values::Int(ref values) => values[left] == values[right],
             Values::Float(ref values) => values[left] == values[right],
             Values::String(ref values) => values[left] == values[right],
-            Values::List(ref values) => unimplemented!(),
+            Values::List(_) => unimplemented!(),
         }
     }
 

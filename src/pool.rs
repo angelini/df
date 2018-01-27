@@ -1,6 +1,8 @@
 use rand::{self, Rng};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 use std::result;
 use value::{ListValues, Value, Values};
 
@@ -53,12 +55,33 @@ macro_rules! get_value {
     };
 }
 
+pub type RefCounts = Rc<RefCell<HashMap<u64, u64>>>;
+
 #[derive(Debug, Default)]
 pub struct Pool {
     entries: HashMap<u64, Entry>,
+    ref_counts: RefCounts,
 }
 
 impl Pool {
+    pub fn size(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn clean(&mut self) -> usize {
+        let mut to_remove = vec![];
+        for (key, count) in self.ref_counts.borrow().iter() {
+            if *count == 0 {
+                to_remove.push(*key);
+            }
+        }
+        for key in &to_remove {
+            self.entries.remove(key);
+            self.ref_counts.borrow_mut().remove(key);
+        }
+        to_remove.len()
+    }
+
     pub fn len(&self, idx: &u64) -> usize {
         match self.entries.get(idx).map(|entry| &entry.values) {
             Some(&Values::Boolean(ref values)) => values.len(),
@@ -90,12 +113,18 @@ impl Pool {
 
     pub fn set_values(&mut self, idx: u64, values: Values, sorted: bool) {
         self.entries.insert(idx, Entry::new(values, sorted));
+        self.increment_count(idx);
     }
 
     pub fn set_initial_values(&mut self, values: Values) -> u64 {
         let idx = self.unused_idx();
         self.entries.insert(idx, Entry::new(values, false));
+        self.increment_count(idx);
         idx
+    }
+
+    pub fn clone_ref_counts(&self) -> RefCounts {
+        Rc::clone(&self.ref_counts)
     }
 
     fn get_clone<T>(slice: &[T], idx: &u64) -> Option<T>
@@ -118,5 +147,11 @@ impl Pool {
                 return idx;
             }
         }
+    }
+
+    fn increment_count(&mut self, idx: u64) {
+        let mut counts = self.ref_counts.borrow_mut();
+        let count = counts.entry(idx).or_insert(0);
+        *count += 1;
     }
 }
