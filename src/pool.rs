@@ -108,7 +108,19 @@ impl Pool {
     }
 
     pub fn get_value(&self, col_idx: &u64, row_idx: &u64) -> Option<Value> {
-        get_value!(self, col_idx, row_idx, Boolean, BooleanList, Int, IntList, Float, FloatList, String, StringList)
+        get_value!(
+            self,
+            col_idx,
+            row_idx,
+            Boolean,
+            BooleanList,
+            Int,
+            IntList,
+            Float,
+            FloatList,
+            String,
+            StringList
+        )
     }
 
     pub fn set_values(&mut self, idx: u64, values: Values, sorted: bool) {

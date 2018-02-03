@@ -1,5 +1,3 @@
-use decorum::R64;
-use pool::{self, Pool, RefCounts};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
@@ -7,40 +5,25 @@ use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
 use std::rc::Rc;
 use std::result;
+
+use aggregate::{self, Aggregator};
+use pool::{self, Pool, RefCounts};
 use value::{self, Predicate, Type, Value, Values};
 
 #[derive(Debug)]
-pub enum AggregateError {
-    EmptyColumn,
-    SumOnInvalidType(Type),
-}
-
-impl fmt::Display for AggregateError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            AggregateError::EmptyColumn => write!(f, "Aggregate on empty column"),
-            AggregateError::SumOnInvalidType(ref type_) => {
-                write!(f, "Sum aggregate on {:?} column", type_)
-            }
-        }
-    }
-}
-
-type AggregateResult<T> = result::Result<T, AggregateError>;
-
-#[derive(Debug)]
 pub enum Error {
+    AggregatesOnGroupColumn(Vec<String>),
     MissingAggregates(Vec<String>),
     MissingColumnInIndices(String),
     SortingWithNoSortColumns,
     EmptyIndices,
-    Aggregate(AggregateError),
+    Aggregate(aggregate::Error),
     Pool(pool::Error),
     Value(value::Error),
 }
 
-impl From<AggregateError> for Error {
-    fn from(error: AggregateError) -> Error {
+impl From<aggregate::Error> for Error {
+    fn from(error: aggregate::Error) -> Error {
         Error::Aggregate(error)
     }
 }
@@ -60,6 +43,9 @@ impl From<value::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            Error::AggregatesOnGroupColumn(ref col_names) => {
+                write!(f, "Aggregates on group columns {:?}", col_names)
+            }
             Error::MissingAggregates(ref col_names) => {
                 write!(f, "Missing aggregates for {:?}", col_names)
             }
@@ -93,7 +79,7 @@ impl Column {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Schema {
     columns: BTreeMap<String, Column>,
 }
@@ -118,91 +104,13 @@ impl Schema {
     }
 }
 
-macro_rules! simple_aggregate {
-    ( $i:expr, $f:ident, $l:ident, $( $t:ident ),* ) => {
-        match $i {
-            Values::$l(_) => unimplemented!(),
-            $(
-                Values::$t(values) => Value::$t(Aggregator::$f(&values)?),
-            )*
-        }
-    };
-}
-#[derive(Clone, Hash)]
-pub enum Aggregator {
-    First,
-    Sum,
-    Max,
-    Min,
-}
-
-impl Aggregator {
-    fn output_type(&self, input_type: &Type) -> AggregateResult<Type> {
-        match *self {
-            Aggregator::Sum => {
-                if input_type == &Type::Int {
-                    Ok(Type::Int)
-                } else {
-                    Err(AggregateError::SumOnInvalidType(input_type.clone()))
-                }
-            }
-            Aggregator::First | Aggregator::Max | Aggregator::Min => Ok(input_type.clone()),
-        }
-    }
-
-    fn aggregate(&self, input: Values) -> AggregateResult<Value> {
-        Ok(match *self {
-            Aggregator::First => {
-                simple_aggregate!(input, first, List, Boolean, Int, Float, String)
-            }
-            Aggregator::Sum => {
-                match input {
-                    Values::Int(values) => Value::Int(values.iter().fold(0, |acc, &v| acc + v)),
-                    Values::Float(values) => Value::Float(values.iter().fold(
-                        R64::from_inner(0.0),
-                        |acc, &v| acc + v,
-                    )),
-                    _ => return Err(AggregateError::SumOnInvalidType(input.type_())),
-                }
-            }
-            Aggregator::Max => {
-                simple_aggregate!(input, max, List, Boolean, Int, Float, String)
-            }
-            Aggregator::Min => {
-                simple_aggregate!(input, min, List, Boolean, Int, Float, String)
-            }
-        })
-    }
-
-    fn first<T: Clone>(values: &[T]) -> AggregateResult<T> {
-        match values.first() {
-            Some(v) => Ok(v.clone()),
-            None => Err(AggregateError::EmptyColumn),
-        }
-    }
-
-    fn max<T: Clone + Ord>(values: &[T]) -> AggregateResult<T> {
-        match values.iter().max() {
-            Some(v) => Ok(v.clone()),
-            None => Err(AggregateError::EmptyColumn),
-        }
-    }
-
-    fn min<T: Clone + Ord>(values: &[T]) -> AggregateResult<T> {
-        match values.iter().min() {
-            Some(v) => Ok(v.clone()),
-            None => Err(AggregateError::EmptyColumn),
-        }
-    }
-}
-
-#[derive(Clone, Hash)]
+#[derive(Clone, Debug, Hash)]
 enum Operation {
     Select(Vec<String>),
     Filter(String, Predicate),
     Sort(Vec<String>),
-    Aggregation(BTreeMap<String, Aggregator>),
     GroupBy(Vec<String>),
+    Aggregation(BTreeMap<String, Aggregator>),
 }
 
 impl Operation {
@@ -220,6 +128,8 @@ pub struct DataFrame {
     pub schema: Schema,
     parent: Option<Box<DataFrame>>,
     operation: Option<Operation>,
+    grouped_by: Vec<String>,
+    sorted_by: Vec<String>,
     pool_indices: BTreeMap<String, u64>,
     ref_counts: RefCounts,
 }
@@ -235,6 +145,8 @@ impl DataFrame {
             pool_indices,
             parent: None,
             operation: None,
+            sorted_by: vec![],
+            grouped_by: vec![],
             ref_counts: pool.clone_ref_counts(),
         }
     }
@@ -251,6 +163,8 @@ impl DataFrame {
             schema: self.schema.select(column_names),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
+            sorted_by: self.sorted_by.clone(),
+            grouped_by: self.grouped_by.clone(),
             ref_counts: Rc::clone(&self.ref_counts),
         })
     }
@@ -262,55 +176,39 @@ impl DataFrame {
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
+            sorted_by: self.sorted_by.clone(),
+            grouped_by: self.grouped_by.clone(),
             ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
     pub fn sort(&self, column_names: &[&str]) -> Result<DataFrame> {
-        let operation = Operation::Sort(column_names.iter().map(|s| s.to_string()).collect());
+        if self.sorted_by == column_names {
+            return Ok(self.clone())
+        }
+        let col_name_strings = column_names.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let operation = Operation::Sort(col_name_strings.clone());
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-            ref_counts: Rc::clone(&self.ref_counts),
-        })
-    }
-
-    pub fn aggregate(&self, aggregators: &BTreeMap<String, Aggregator>) -> Result<DataFrame> {
-        {
-            let missing: HashSet<&String> = &HashSet::from_iter(self.schema.columns.keys()) -
-                &HashSet::from_iter(aggregators.keys());
-            if !missing.is_empty() {
-                return Err(Error::MissingAggregates(
-                    missing.iter().map(|s| s.to_string()).collect(),
-                ));
-            }
-        }
-        let columns = self.schema
-            .columns
-            .iter()
-            .map(|(name, column)| {
-                let aggregator = &aggregators[name];
-                Ok((
-                    name.clone(),
-                    Column::new(aggregator.output_type(&column.type_)?),
-                ))
-            })
-            .collect::<Result<BTreeMap<String, Column>>>()?;
-        let operation = Operation::Aggregation(aggregators.clone());
-        Ok(DataFrame {
-            pool_indices: Self::new_indices(&operation, &self.pool_indices),
-            schema: Schema { columns },
-            parent: Some(Box::new(self.clone())),
-            operation: Some(operation),
+            sorted_by: col_name_strings,
+            grouped_by: self.grouped_by.clone(),
             ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
     pub fn group_by(&self, column_names: &[&str]) -> Result<DataFrame> {
-        let sorted = self.sort(column_names)?;
-        let operation = Operation::GroupBy(column_names.iter().map(|s| s.to_string()).collect());
+        if self.grouped_by == column_names {
+            return Ok(self.clone())
+        }
+        let sorted = if self.sorted_by == column_names {
+            self.clone()
+        } else {
+            self.sort(column_names)?
+        };
+        let operation = Operation::GroupBy(column_names.iter().map(|s| s.to_string()).collect::<Vec<String>>());
         let columns = sorted
             .schema
             .columns
@@ -329,6 +227,52 @@ impl DataFrame {
             schema: Schema { columns },
             parent: Some(Box::new(sorted.clone())),
             operation: Some(operation),
+            sorted_by: sorted.sorted_by.clone(),
+            grouped_by: sorted.sorted_by.clone(),
+            ref_counts: Rc::clone(&sorted.ref_counts),
+        })
+    }
+
+    pub fn aggregate(&self, aggregators: &BTreeMap<String, Aggregator>) -> Result<DataFrame> {
+        {
+            let aggregate_keys: HashSet<&String> = HashSet::from_iter(aggregators.keys());
+            let group_keys = HashSet::from_iter(&self.grouped_by);
+            let overlap = &aggregate_keys & &group_keys;
+            if !overlap.is_empty() {
+                return Err(Error::AggregatesOnGroupColumn(
+                    overlap.iter().map(|s| s.to_string()).collect()
+                ));
+            }
+            let missing = &(&HashSet::from_iter(self.schema.columns.keys()) - &aggregate_keys) - &group_keys;
+            if !missing.is_empty() {
+                return Err(Error::MissingAggregates(
+                    missing.iter().map(|s| s.to_string()).collect()
+                ));
+            }
+        }
+        let columns = self.schema
+            .columns
+            .iter()
+            .map(|(name, column)| {
+                if aggregators.contains_key(name) {
+                    let aggregator = &aggregators[name];
+                    Ok((
+                        name.clone(),
+                        Column::new(aggregator.output_type(&column.type_)?),
+                    ))
+                } else {
+                    Ok((name.clone(), column.clone()))
+                }
+            })
+            .collect::<Result<BTreeMap<String, Column>>>()?;
+        let operation = Operation::Aggregation(aggregators.clone());
+        Ok(DataFrame {
+            pool_indices: Self::new_indices(&operation, &self.pool_indices),
+            schema: Schema { columns },
+            parent: Some(Box::new(self.clone())),
+            operation: Some(operation),
+            sorted_by: self.sorted_by.clone(),
+            grouped_by: self.grouped_by.clone(),
             ref_counts: Rc::clone(&self.ref_counts),
         })
     }
@@ -343,7 +287,10 @@ impl DataFrame {
         let result_size = pool.len(
             self.pool_indices.values().nth(0).ok_or(Error::EmptyIndices)?,
         ) as u64;
-        
+
+        println!("self.schema: {:?}", self.schema);
+        println!("self.pool_indices: {:?}", self.pool_indices);
+        println!("pool: {:?}", pool);
         loop {
             if row_idx == result_size {
                 return Ok(rows);
@@ -469,14 +416,18 @@ impl DataFrame {
             }
             Operation::Aggregation(ref aggregators) => {
                 for (col_name, idx) in &parent.pool_indices {
-                    let aggregator = &aggregators[col_name];
                     let new_idx = operation.hash_from_seed(idx, col_name);
                     let entry = pool.get_entry(idx)?;
-                    pool.set_values(
-                        new_idx,
-                        Values::from(aggregator.aggregate(entry.values)?),
-                        true,
-                    )
+                    if aggregators.contains_key(col_name) {
+                        let aggregator = &aggregators[col_name];
+                        pool.set_values(
+                            new_idx,
+                            aggregator.aggregate(entry.values)?,
+                            false,
+                        )
+                    } else {
+                        pool.set_values(new_idx, entry.values, entry.sorted)
+                    }
                 }
             }
             Operation::GroupBy(ref col_names) => {
@@ -504,7 +455,11 @@ impl DataFrame {
                     let parent_entry = pool.get_entry(&parent_idx)?;
                     let idx = self.get_idx(col_name)?;
                     if col_names.contains(col_name) {
-                        pool.set_values(idx, parent_entry.values.group_to_value(&group_offsets), false);
+                        pool.set_values(
+                            idx,
+                            parent_entry.values.group_to_value(&group_offsets),
+                            false,
+                        );
                     } else {
                         pool.set_values(idx, parent_entry.values.group_by(&group_offsets), false);
                     }

@@ -258,7 +258,16 @@ impl Values {
         parent_sorting: &Option<&[usize]>,
         only_use_parent: bool,
     ) -> (Vec<usize>, Values) {
-        sort!(self, parent_sorting, only_use_parent, List, Boolean, Int, Float, String)
+        sort!(
+            self,
+            parent_sorting,
+            only_use_parent,
+            List,
+            Boolean,
+            Int,
+            Float,
+            String
+        )
     }
 
     pub fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
@@ -384,7 +393,7 @@ impl From<Value> for Values {
     }
 }
 
-#[derive(Clone, Hash)]
+#[derive(Clone, Debug, Hash)]
 pub enum Comparator {
     Equal,
     GreaterThan,
@@ -420,7 +429,7 @@ macro_rules! filter {
     };
 }
 
-#[derive(Clone, Hash)]
+#[derive(Clone, Debug, Hash)]
 pub struct Predicate {
     comparator: Comparator,
     value: Value,
