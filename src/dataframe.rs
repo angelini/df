@@ -61,11 +61,19 @@ impl fmt::Display for Error {
     }
 }
 
-type Result<T> = result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct Row {
     values: Vec<Value>,
+}
+
+impl Row {
+    pub fn new(values: Vec<Value>) -> Row {
+        Row {
+            values
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

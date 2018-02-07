@@ -1,41 +1,12 @@
-#![feature(box_syntax, box_patterns, plugin)]
-
-#![plugin(clippy)]
-
-extern crate decorum;
-extern crate rand;
-
-mod aggregate;
-mod dataframe;
-mod pool;
-mod value;
+#[macro_use]
+extern crate df;
 
 use std::collections::{BTreeMap, HashMap};
 
-use aggregate::Aggregator;
-use dataframe::{DataFrame, Schema};
-use pool::Pool;
-use value::{Comparator, Predicate, Type, Value, Values};
-
-macro_rules! agg {
-    ( $( $c:expr, $a:expr ),* ) => {{
-        let mut aggregators = BTreeMap::new();
-        $(
-            aggregators.insert($c.to_string(), $a);
-        )*
-        aggregators
-    }};
-}
-
-macro_rules! values {
-    ( $( $c:expr, $v:expr ),* ) => {{
-        let mut values = HashMap::new();
-        $(
-            values.insert($c.to_string(), Values::from($v));
-        )*
-        values
-    }};
-}
+use df::aggregate::Aggregator;
+use df::dataframe::{self, DataFrame, Schema};
+use df::pool::Pool;
+use df::value::{Comparator, Predicate, Type, Value, Values};
 
 fn examples(pool: &mut Pool) -> Result<(), dataframe::Error> {
     let schema = Schema::new(&["bool", "int"], &[Type::Boolean, Type::Int]);
@@ -73,10 +44,9 @@ fn examples(pool: &mut Pool) -> Result<(), dataframe::Error> {
     let group_df = df.group_by(&["int"])?;
     println!("group_df: {:?}", group_df.collect(pool)?);
 
-    // let agg_group_df = df.group_by(&["bool"])?;
-    // println!("{:?}", agg_group_df.collect(pool)?);
-
-    let agg_group_df = df.group_by(&["bool"])?.aggregate(&agg!("int", Aggregator::Sum))?;
+    let agg_group_df = df.group_by(&["bool"])?.aggregate(
+        &agg!("int", Aggregator::Sum),
+    )?;
     println!("agg_group_df: {:?}", agg_group_df.collect(pool)?);
 
     Ok(())

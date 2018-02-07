@@ -1,5 +1,4 @@
 use std::fmt;
-use std::rc::Rc;
 use std::result;
 
 use decorum::R64;
@@ -122,7 +121,7 @@ impl Aggregator {
             Aggregator::Max => {
                 simple_aggregate!(
                     input,
-                    first,
+                    max,
                     Boolean,
                     bool,
                     Int,
@@ -136,7 +135,7 @@ impl Aggregator {
             Aggregator::Min => {
                 simple_aggregate!(
                     input,
-                    first,
+                    min,
                     Boolean,
                     bool,
                     Int,
