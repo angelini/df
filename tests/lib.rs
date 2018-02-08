@@ -1,3 +1,5 @@
+#![feature(custom_attribute)]
+
 #[macro_use]
 extern crate df;
 
@@ -13,7 +15,7 @@ macro_rules! assert_df_eq {
             df::dataframe::Row::new(vec![$( df::value::Value::from($v), )*]),
         )*];
         assert_eq!(rows, expected);
-    }
+    };
 }
 
 fn check(result: Result<DataFrame>) -> DataFrame {
@@ -31,10 +33,6 @@ fn test_no_transforms() {
     assert_df_eq!(&mut pool, df, (true, 1), (false, 2), (true, 3));
 }
 
-fn select_query(df: DataFrame) -> Result<DataFrame> {
-    df.select(&["int"])
-}
-
 #[test]
 fn test_select() {
     let mut pool = Pool::default();
@@ -43,11 +41,8 @@ fn test_select() {
         ("bool", Type::Boolean, vec![true, false, true]),
         ("int", Type::Int, vec![1, 2, 3])
     );
-    assert_df_eq!(&mut pool, check(select_query(df)), (1), (2), (3));
-}
-
-fn filter_eq_query(df: DataFrame) -> Result<DataFrame> {
-    df.filter("int", Predicate::new(Comparator::Equal, Value::from(2)))
+    let output = df.select(&["int"]);
+    assert_df_eq!(&mut pool, check(output), (1), (2), (3));
 }
 
 #[test]
@@ -58,13 +53,8 @@ fn test_filter_eq() {
         ("bool", Type::Boolean, vec![true, false, true]),
         ("int", Type::Int, vec![1, 2, 3])
     );
-    assert_df_eq!(&mut pool, check(filter_eq_query(df)), (false, 2));
-}
-
-fn filter_select_query(df: DataFrame) -> Result<DataFrame> {
-    df.filter("int", Predicate::new(Comparator::Equal, Value::from(2)))?
-        .select(&["bool"])
-
+    let output = df.filter("int", Predicate::new(Comparator::Equal, Value::from(2)));
+    assert_df_eq!(&mut pool, check(output), (false, 2));
 }
 
 #[test]
@@ -75,76 +65,110 @@ fn test_filter_select() {
         ("bool", Type::Boolean, vec![true, false, true]),
         ("int", Type::Int, vec![1, 2, 3])
     );
-    assert_df_eq!(&mut pool, check(filter_select_query(df)), (false));
-}
-
-fn sort_query(df: DataFrame) -> Result<DataFrame> {
-    df.sort(&["int_1"])
+    let output = || {
+        df.filter("int", Predicate::new(Comparator::Equal, Value::from(2)))?
+            .select(&["bool"])
+    };
+    assert_df_eq!(&mut pool, check(output()), (false));
 }
 
 #[test]
+#[rustfmt_skip]
 fn test_sort() {
+    let mut pool = Pool::default();
+    let df = from_vecs!(&mut pool, ("1_int", Type::Int, vec![4, 1, 6]), (
+        "2_int",
+        Type::Int,
+        vec![1, 2, 3]
+    ));
+    let output = df.sort(&["1_int"]);
+    assert_df_eq!(&mut pool, check(output), (1, 2), (4, 1), (6, 3));
+}
+
+#[test]
+fn test_group_only_keys() {
+    let mut pool = Pool::default();
+    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
+    let output = df.group_by(&["int"]);
+    assert_df_eq!(&mut pool, check(output), (1), (2), (3));
+}
+
+#[test]
+#[rustfmt_skip]
+fn test_group() {
+    let mut pool = Pool::default();
+    let df = from_vecs!(&mut pool, ("1_int", Type::Int, vec![3, 2, 1, 2]), (
+        "2_bool",
+        Type::Boolean,
+        vec![true, false, true, true]
+    ));
+    let output = df.group_by(&["1_int"]);
+    assert_df_eq!(
+        &mut pool,
+        check(output),
+        (1, vec![true]),
+        (2, vec![false, true]),
+        (3, vec![true])
+    );
+}
+
+#[test]
+fn test_group_agg() {
     let mut pool = Pool::default();
     let df = from_vecs!(
         &mut pool,
-        ("int_1", Type::Int, vec![4, 1, 6]),
-        ("int_2", Type::Int, vec![1, 2, 3])
+        ("bool", Type::Boolean, vec![true, false, true]),
+        ("int", Type::Int, vec![1, 2, 3])
     );
-    assert_df_eq!(&mut pool, check(sort_query(df)), (1, 2), (4, 1), (6, 3));
-}
-
-fn agg_sum_query(df: DataFrame) -> Result<DataFrame> {
-    df.aggregate(&agg!("int", Aggregator::Sum))
+    let output = || {
+        df.group_by(&["bool"])?.aggregate(
+            &agg!("int", Aggregator::Sum),
+        )
+    };
+    assert_df_eq!(&mut pool, check(output()), (false, 2), (true, 4));
 }
 
 #[test]
 fn test_agg_sum() {
     let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("int", Type::Int, vec![1, 2, 3])
-    );
-    assert_df_eq!(&mut pool, check(agg_sum_query(df)), (6));
-}
-
-fn agg_first_query(df: DataFrame) -> Result<DataFrame> {
-    df.aggregate(&agg!("int", Aggregator::First))
+    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![1, 2, 3]));
+    let output = df.aggregate(&agg!("int", Aggregator::Sum));
+    assert_df_eq!(&mut pool, check(output), (6));
 }
 
 #[test]
 fn test_agg_first() {
     let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("int", Type::Int, vec![1, 2, 3])
-    );
-    assert_df_eq!(&mut pool, check(agg_first_query(df)), (1));
-}
-
-fn agg_max_query(df: DataFrame) -> Result<DataFrame> {
-    df.aggregate(&agg!("int", Aggregator::Max))
+    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![1, 2, 3]));
+    let output = df.aggregate(&agg!("int", Aggregator::First));
+    assert_df_eq!(&mut pool, check(output), (1));
 }
 
 #[test]
 fn test_agg_max() {
     let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("int", Type::Int, vec![1, 2, 3, 2])
-    );
-    assert_df_eq!(&mut pool, check(agg_max_query(df)), (3));
-}
-
-fn agg_min_query(df: DataFrame) -> Result<DataFrame> {
-    df.aggregate(&agg!("int", Aggregator::Min))
+    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![1, 2, 3, 2]));
+    let output = df.aggregate(&agg!("int", Aggregator::Max));
+    assert_df_eq!(&mut pool, check(output), (3));
 }
 
 #[test]
 fn test_agg_min() {
     let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("int", Type::Int, vec![2, 1, 2, 3])
-    );
-    assert_df_eq!(&mut pool, check(agg_min_query(df)), (1));
+    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
+    let output = df.aggregate(&agg!("int", Aggregator::Min));
+    assert_df_eq!(&mut pool, check(output), (1));
+}
+
+#[test]
+fn test_pool_clean() {
+    let mut pool = Pool::default();
+    assert_eq!(pool.size(), 0);
+    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
+    let df2 = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
+    check(df.sort(&["int"])).collect(&mut pool).unwrap();
+    check(df2.sort(&["int"])).collect(&mut pool).unwrap();
+    assert_eq!(pool.size(), 4);
+    assert_eq!(pool.clean(), 4);
+    assert_eq!(pool.size(), 0);
 }

@@ -337,7 +337,6 @@ impl Values {
             if idx == 0 {
                 result.push(value.clone());
             } else if offset_index == group_offsets.len() {
-                result.push(value.clone());
                 return result;
             } else if idx == group_offsets[offset_index] {
                 result.push(value.clone());

@@ -296,9 +296,6 @@ impl DataFrame {
             self.pool_indices.values().nth(0).ok_or(Error::EmptyIndices)?,
         ) as u64;
 
-        println!("self.schema: {:?}", self.schema);
-        println!("self.pool_indices: {:?}", self.pool_indices);
-        println!("pool: {:?}", pool);
         loop {
             if row_idx == result_size {
                 return Ok(rows);
@@ -422,22 +419,6 @@ impl DataFrame {
                     None => return Err(Error::SortingWithNoSortColumns),
                 }
             }
-            Operation::Aggregation(ref aggregators) => {
-                for (col_name, idx) in &parent.pool_indices {
-                    let new_idx = operation.hash_from_seed(idx, col_name);
-                    let entry = pool.get_entry(idx)?;
-                    if aggregators.contains_key(col_name) {
-                        let aggregator = &aggregators[col_name];
-                        pool.set_values(
-                            new_idx,
-                            aggregator.aggregate(entry.values)?,
-                            false,
-                        )
-                    } else {
-                        pool.set_values(new_idx, entry.values, entry.sorted)
-                    }
-                }
-            }
             Operation::GroupBy(ref col_names) => {
                 let mut len = 0;
                 let mut group_columns = vec![];
@@ -470,6 +451,22 @@ impl DataFrame {
                         );
                     } else {
                         pool.set_values(idx, parent_entry.values.group_by(&group_offsets), false);
+                    }
+                }
+            }
+            Operation::Aggregation(ref aggregators) => {
+                for (col_name, idx) in &parent.pool_indices {
+                    let new_idx = operation.hash_from_seed(idx, col_name);
+                    let entry = pool.get_entry(idx)?;
+                    if aggregators.contains_key(col_name) {
+                        let aggregator = &aggregators[col_name];
+                        pool.set_values(
+                            new_idx,
+                            aggregator.aggregate(entry.values)?,
+                            false,
+                        )
+                    } else {
+                        pool.set_values(new_idx, entry.values, entry.sorted)
                     }
                 }
             }

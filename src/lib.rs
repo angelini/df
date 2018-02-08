@@ -45,4 +45,7 @@ macro_rules! from_vecs {
         )*
         df::dataframe::DataFrame::new($p, schema, values)
     }};
+    ( $p:expr, $( ($n:expr, $t:path, $v:expr,) ),* ) => {{
+        from_vecs!($p, $(($n, $t, $v)),*)
+    }};
 }
