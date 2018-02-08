@@ -6,7 +6,7 @@ extern crate df;
 use df::aggregate::Aggregator;
 use df::dataframe::{DataFrame, Result};
 use df::pool::Pool;
-use df::value::{Comparator, Predicate, Value, Type};
+use df::value::Type;
 
 macro_rules! assert_df_eq {
     ( $p:expr, $d:expr, $( ( $($v:expr),* ) ),* ) => {
@@ -53,7 +53,7 @@ fn test_filter_eq() {
         ("bool", Type::Boolean, vec![true, false, true]),
         ("int", Type::Int, vec![1, 2, 3])
     );
-    let output = df.filter("int", Predicate::new(Comparator::Equal, Value::from(2)));
+    let output = df.filter("int", predicate!(== 2));
     assert_df_eq!(&mut pool, check(output), (false, 2));
 }
 
@@ -66,7 +66,7 @@ fn test_filter_select() {
         ("int", Type::Int, vec![1, 2, 3])
     );
     let output = || {
-        df.filter("int", Predicate::new(Comparator::Equal, Value::from(2)))?
+        df.filter("int", predicate!(== 2))?
             .select(&["bool"])
     };
     assert_df_eq!(&mut pool, check(output()), (false));

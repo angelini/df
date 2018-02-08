@@ -173,6 +173,10 @@ impl ListValues {
         len!(self, ListValues, Boolean, Int, Float, String)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn select_by_idx(&self, indices: &[usize]) -> ListValues {
         list_select_by_idx!(self, indices, Boolean, Int, Float, String)
     }
@@ -247,6 +251,10 @@ impl Values {
 
     pub fn len(&self) -> usize {
         len!(self, Values, List, Boolean, Int, Float, String)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn select_by_idx(&self, indices: &[usize]) -> Values {

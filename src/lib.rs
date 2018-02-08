@@ -22,13 +22,21 @@ macro_rules! agg {
 }
 
 #[macro_export]
-macro_rules! values {
-    ( $( $c:expr, $v:expr ),* ) => {{
-        let mut values = std::collections::HashMap::new();
-        $(
-            values.insert($c.to_string(), df::value::Values::from($v));
-        )*
-        values
+macro_rules! predicate {
+    ( == $v:expr ) => {{
+        df::value::Predicate::new(df::value::Comparator::Equal, df::value::Value::from($v))
+    }};
+    ( > $v:expr ) => {{
+        df::value::Predicate::new(df::value::Comparator::GreaterThan, df::value::Value::from($v))
+    }};
+    ( >= $v:expr ) => {{
+        df::value::Predicate::new(df::value::Comparator::GreaterThanOrEq, df::value::Value::from($v))
+    }};
+    ( < $v:expr ) => {{
+        df::value::Predicate::new(df::value::Comparator::LessThan, df::value::Value::from($v))
+    }};
+    ( <= $v:expr ) => {{
+        df::value::Predicate::new(df::value::Comparator::LessThanOrEq, df::value::Value::from($v))
     }};
 }
 
