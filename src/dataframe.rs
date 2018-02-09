@@ -446,7 +446,7 @@ impl DataFrame {
                     if col_names.contains(col_name) {
                         pool.set_values(
                             idx,
-                            parent_entry.values.group_to_value(&group_offsets),
+                            parent_entry.values.distinct(),
                             false,
                         );
                     } else {

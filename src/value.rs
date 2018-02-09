@@ -218,12 +218,12 @@ macro_rules! group_by {
     };
 }
 
-macro_rules! group_to_value {
-    ( $v:expr, $o:expr, $l:ident, $( $t:ident ),* ) => {
+macro_rules! distinct {
+    ( $v:expr, $l:ident, $( $t:ident ),* ) => {
         match *$v {
             Values::$l(_) => unimplemented!(),
             $(
-                Values::$t(ref values) => Values::from(Values::gen_group_to_value(values, $o)),
+                Values::$t(ref values) => Values::from(Values::gen_distinct(values)),
             )*
         }
     };
@@ -292,8 +292,8 @@ impl Values {
         group_by!(self, group_offsets, List, Boolean, Int, Float, String)
     }
 
-    pub fn group_to_value(&self, group_offsets: &[usize]) -> Values {
-        group_to_value!(self, group_offsets, List, Boolean, Int, Float, String)
+    pub fn distinct(&self) -> Values {
+        distinct!(self, List, Boolean, Int, Float, String)
     }
 
     fn gen_sort<T: Clone + Ord>(
@@ -338,17 +338,14 @@ impl Values {
         outer
     }
 
-    fn gen_group_to_value<T: Clone>(values: &[T], group_offsets: &[usize]) -> Vec<T> {
-        let mut offset_index = 0;
-        let mut result = vec![];
-        for (idx, value) in values.iter().enumerate() {
-            if idx == 0 {
+    fn gen_distinct<T: Clone + PartialEq>(values: &[T]) -> Vec<T> {
+        if values.is_empty() {
+            return vec![];
+        }
+        let mut result = vec![values[0].clone()];
+        for value in values.iter().skip(1) {
+            if value != result.last().unwrap() {
                 result.push(value.clone());
-            } else if offset_index == group_offsets.len() {
-                return result;
-            } else if idx == group_offsets[offset_index] {
-                result.push(value.clone());
-                offset_index += 1;
             }
         }
         result
