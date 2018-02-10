@@ -195,6 +195,25 @@ fn test_agg_min() {
 }
 
 #[test]
+fn test_agg_multiple_columns() {
+    let mut pool = Pool::default();
+    let df =
+        from_vecs!(&mut pool,
+                   ("1_int", Type::Int, vec![4, 1, 6, 4, 1]),
+                   ("2_int", Type::Int, vec![3, 1, 1, 1, 2]),
+                   ("3_int", Type::Int, vec![1, 2, 3, 4, 5]));
+    let output = df.aggregate(&agg!(
+        "1_int",
+        Aggregator::Sum,
+        "2_int",
+        Aggregator::Min,
+        "3_int",
+        Aggregator::Max
+    ));
+    assert_df_eq!(&mut pool, check(output), (16, 1, 5));
+}
+
+#[test]
 fn test_pool_clean() {
     let mut pool = Pool::default();
     assert_eq!(pool.size(), 0);
