@@ -78,37 +78,64 @@ impl Row {
 
 #[derive(Clone, Debug)]
 pub struct Column {
+    pub name: String,
     pub type_: Type,
 }
 
 impl Column {
-    fn new(type_: Type) -> Column {
-        Column { type_ }
+    fn new(name: String, type_: Type) -> Column {
+        Column { name, type_ }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct Schema {
-    pub columns: BTreeMap<String, Column>,
+    pub columns: Vec<Column>,
 }
 
 impl Schema {
-    pub fn new(names: &[&str], types: &[Type]) -> Schema {
-        let mut columns = BTreeMap::new();
-        for (idx, name) in names.iter().enumerate() {
-            columns.insert(name.to_string(), Column::new(types[idx].clone()));
+    pub fn new(columns: &[(&str, Type)]) -> Schema {
+        Schema {
+            columns: columns
+                .into_iter()
+                .map(|&(name, ref type_)| Column::new(name.to_string(), type_.clone()))
+                .collect(),
         }
-        Schema { columns }
+    }
+
+    pub fn keys(&self) -> Vec<&String> {
+        self.columns.iter().map(|column| &column.name).collect()
+    }
+
+    pub fn iter(&self) -> ::std::slice::Iter<Column> {
+        self.columns.iter()
+    }
+
+    pub fn type_(&self, name: &str) -> Option<Type> {
+        self.columns
+            .iter()
+            .find(|column| column.name == name)
+            .map(|column| column.type_.clone())
+            .clone()
     }
 
     fn select(&self, column_names: &[&str]) -> Schema {
         Schema {
             columns: self.columns
                 .iter()
-                .filter(|&(k, _)| column_names.contains(&k.as_str()))
-                .map(|(k, v)| (k.clone(), v.clone()))
+                .filter(|&column| column_names.contains(&column.name.as_str()))
+                .cloned()
                 .collect(),
         }
+    }
+}
+
+impl IntoIterator for Schema {
+    type Item = Column;
+    type IntoIter = ::std::vec::IntoIter<Column>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.columns.into_iter()
     }
 }
 
@@ -227,17 +254,16 @@ impl DataFrame {
         );
         let columns = ordered
             .schema
-            .columns
             .iter()
-            .map(|(name, column)| if column_names.contains(&name.as_str()) {
-                (name.clone(), column.clone())
+            .map(|column| if column_names.contains(&column.name.as_str()) {
+                column.clone()
             } else {
-                (
-                    name.clone(),
-                    Column::new(Type::List(Box::new(column.type_.clone()))),
+                Column::new(
+                    column.name.clone(),
+                    Type::List(Box::new(column.type_.clone())),
                 )
             })
-            .collect::<BTreeMap<String, Column>>();
+            .collect::<Vec<Column>>();
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &ordered.pool_indices),
             schema: Schema { columns },
@@ -259,7 +285,7 @@ impl DataFrame {
                     overlap.iter().map(|s| s.to_string()).collect(),
                 ));
             }
-            let missing = &(&HashSet::from_iter(self.schema.columns.keys()) - &aggregate_keys) -
+            let missing = &(&HashSet::from_iter(self.schema.keys()) - &aggregate_keys) -
                 &group_keys;
             if !missing.is_empty() {
                 return Err(Error::MissingAggregates(
@@ -268,18 +294,17 @@ impl DataFrame {
             }
         }
         let columns = self.schema
-            .columns
             .iter()
-            .map(|(name, column)| if aggregators.contains_key(name) {
-                let aggregator = &aggregators[name];
-                Ok((
-                    name.clone(),
-                    Column::new(aggregator.output_type(&column.type_)?),
+            .map(|column| if aggregators.contains_key(&column.name) {
+                let aggregator = &aggregators[&column.name];
+                Ok(Column::new(
+                    column.name.clone(),
+                    aggregator.output_type(&column.type_)?,
                 ))
             } else {
-                Ok((name.clone(), column.clone()))
+                Ok(column.clone())
             })
-            .collect::<Result<BTreeMap<String, Column>>>()?;
+            .collect::<Result<Vec<Column>>>()?;
         let operation = Operation::Aggregation(aggregators.clone());
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &self.pool_indices),
@@ -308,8 +333,8 @@ impl DataFrame {
                 return Ok(rows);
             }
             let mut row_values = vec![];
-            for (column_name, column) in &self.schema.columns {
-                let col_idx = self.pool_indices[column_name];
+            for column in self.schema.iter() {
+                let col_idx = self.pool_indices[&column.name];
                 let value = match (&column.type_, pool.get_value(&col_idx, &row_idx)) {
                     (&Type::Boolean, Some(value @ Value::Boolean(_))) |
                     (&Type::Int, Some(value @ Value::Int(_))) |
@@ -401,9 +426,8 @@ impl DataFrame {
                 }
                 match sort_scores {
                     Some(_) => {
-                        let missing: HashSet<&String> =
-                            &HashSet::from_iter(self.schema.columns.keys()) -
-                                &HashSet::from_iter(col_names);
+                        let missing: HashSet<&String> = &HashSet::from_iter(self.schema.keys()) -
+                            &HashSet::from_iter(col_names);
                         for col_name in missing {
                             let idx = parent.get_idx(col_name)?;
                             let entry = pool.get_entry(&idx)?;
@@ -440,7 +464,7 @@ impl DataFrame {
                 }
                 group_offsets.push(len - 1);
 
-                for col_name in self.schema.columns.keys() {
+                for col_name in self.schema.keys() {
                     let parent_idx = parent.get_idx(col_name)?;
                     let parent_entry = pool.get_entry(&parent_idx)?;
                     let idx = self.get_idx(col_name)?;

@@ -134,9 +134,9 @@ fn test_group_by_only_keys() {
 fn test_group_by() {
     let mut pool = Pool::default();
     let df = from_vecs!(&mut pool,
-                        ("1_int", Type::Int, vec![3, 2, 1, 2]),
-                        ("2_bool", Type::Boolean, vec![true, false, true, true]));
-    let output = df.group_by(&["1_int"]);
+                        ("int", Type::Int, vec![3, 2, 1, 2]),
+                        ("bool", Type::Boolean, vec![true, false, true, true]));
+    let output = df.group_by(&["int"]);
     assert_df_eq!(
         &mut pool,
         check(output),
@@ -153,7 +153,7 @@ fn test_group_by_multiple_columns() {
         from_vecs!(&mut pool,
                         ("1_int", Type::Int, vec![3, 2, 1, 2, 2]),
                         ("2_int", Type::Int, vec![4, 3, 2, 1, 3]),
-                        ("3_bool", Type::Boolean, vec![true, false, true, false, true]));
+                        ("bool", Type::Boolean, vec![true, false, true, false, true]));
     let output = df.group_by(&["1_int", "2_int"]);
     assert_df_eq!(
         &mut pool,
@@ -248,14 +248,19 @@ fn test_pool_clean() {
 #[test]
 fn test_from_csv() {
     let dir = TempDir::new("test_from_csv").unwrap();
-    let path = write_csv(&dir, "example.csv", &[
-        "true|1|1.0|hello world",
-        "false|4|1.2|fOObAr"
-    ]);
+    let path = write_csv(
+        &dir,
+        "example.csv",
+        &["true|1|1.0|hello world", "false|4|1.2|fOObAr"],
+    );
     let mut pool = Pool::default();
     let schema = Schema::new(
-        &["1_bool", "2_int", "3_float", "4_string"],
-        &[Type::Boolean, Type::Int, Type::Float, Type::String],
+        &[
+            ("bool", Type::Boolean),
+            ("int", Type::Int),
+            ("float", Type::Float),
+            ("string", Type::String),
+        ],
     );
     let df = df::from_csv(&mut pool, path.as_path(), &schema);
     assert_df_eq!(&mut pool, df.expect("Cannot build df from csv"),

@@ -59,8 +59,7 @@ macro_rules! predicate {
 macro_rules! from_vecs {
     ( $p:expr, $( ($n:expr, $t:path, $v:expr) ),* ) => {{
         let schema = df::dataframe::Schema::new(
-            &[ $( $n, )* ],
-            &[ $( $t, )* ],
+            &[ $( ($n, $t) ),* ]
         );
         let mut values = std::collections::HashMap::new();
         $(
@@ -108,7 +107,7 @@ impl From<value::Error> for Error {
 type Result<T> = result::Result<T, Error>;
 
 pub fn from_csv(pool: &mut Pool, path: &Path, schema: &Schema) -> Result<DataFrame> {
-    timer::start(1, "from_csv");
+    timer::start(101, "from_csv - read file");
     let file = File::open(path)?;
     let mut csv_reader = csv::ReaderBuilder::new()
         .has_headers(false)
@@ -117,17 +116,23 @@ pub fn from_csv(pool: &mut Pool, path: &Path, schema: &Schema) -> Result<DataFra
     let mut raw_values = HashMap::new();
     for record in csv_reader.records() {
         let record = record?;
-        for (idx, (name, _)) in schema.columns.iter().enumerate() {
-            let entry = raw_values.entry(name).or_insert_with(|| vec![]);
+        for (idx, column) in schema.iter().enumerate() {
+            let entry = raw_values.entry(&column.name).or_insert_with(|| vec![]);
             entry.push(record.get(idx).unwrap().to_string())
         }
     }
-    let values = raw_values.into_iter()
+    timer::stop(101);
+    timer::start(102, "from_csv - cast vecs to Values");
+    let values = raw_values
+        .into_iter()
         .map(|(name, vals)| {
-            let type_ = &schema.columns[name].type_;
-            Ok((name.to_string(), Values::convert_from_strings(type_, &vals)?))
+            let type_ = &schema.type_(name).unwrap();
+            Ok((
+                name.to_string(),
+                Values::convert_from_strings(type_, &vals)?,
+            ))
         })
         .collect::<result::Result<HashMap<String, Values>, value::Error>>()?;
-    timer::stop(1);
+    timer::stop(102);
     Ok(DataFrame::new(pool, schema.clone(), values))
 }
