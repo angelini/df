@@ -219,12 +219,12 @@ macro_rules! group_by {
     };
 }
 
-macro_rules! distinct {
-    ( $v:expr, $l:ident, $( $t:ident ),* ) => {
+macro_rules! keep {
+    ( $v:expr, $i:expr, $l:ident, $( $t:ident ),* ) => {
         match *$v {
             Values::$l(_) => unimplemented!(),
             $(
-                Values::$t(ref values) => Values::from(Values::gen_distinct(values)),
+                Values::$t(ref values) => Values::from(Values::gen_keep(values, $i)),
             )*
         }
     };
@@ -293,8 +293,8 @@ impl Values {
         group_by!(self, group_offsets, List, Boolean, Int, Float, String)
     }
 
-    pub fn distinct(&self) -> Values {
-        distinct!(self, List, Boolean, Int, Float, String)
+    pub fn keep(&self, indices: &[usize]) -> Values {
+        keep!(self, indices, List, Boolean, Int, Float, String)
     }
 
     fn gen_order_by<T: Clone + Ord>(
@@ -341,28 +341,21 @@ impl Values {
         let mut outer = vec![];
         let mut inner = vec![];
         for (idx, value) in values.iter().enumerate() {
-            if offset_index < group_offsets.len() && idx == group_offsets[offset_index] {
+            inner.push(value.clone());
+            if idx == group_offsets[offset_index] {
                 outer.push(inner);
                 inner = vec![];
                 offset_index += 1;
             }
-            inner.push(value.clone())
         }
-        outer.push(inner);
         outer
     }
 
-    fn gen_distinct<T: Clone + PartialEq>(values: &[T]) -> Vec<T> {
-        if values.is_empty() {
-            return vec![];
-        }
-        let mut result = vec![values[0].clone()];
-        for value in values.iter().skip(1) {
-            if value != result.last().unwrap() {
-                result.push(value.clone());
-            }
-        }
-        result
+    fn gen_keep<T: Clone + PartialEq>(values: &[T], indices: &[usize]) -> Vec<T> {
+        indices
+            .into_iter()
+            .map(|idx| values[*idx].clone())
+            .collect()
     }
 }
 

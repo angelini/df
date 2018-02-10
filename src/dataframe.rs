@@ -52,7 +52,9 @@ impl fmt::Display for Error {
             Error::MissingColumnInIndices(ref col_name) => {
                 write!(f, "Missing column in indices {}", col_name)
             }
-            Error::OrderByWithNoSortColumns => write!(f, "Order by called without any sort columns"),
+            Error::OrderByWithNoSortColumns => {
+                write!(f, "Order by called without any sort columns")
+            }
             Error::EmptyIndices => write!(f, "Empty pool indices"),
             Error::Aggregate(ref error) => write!(f, "{}", error),
             Error::Pool(ref error) => write!(f, "{}", error),
@@ -428,20 +430,26 @@ impl DataFrame {
 
                 let mut group_offsets = vec![];
                 for row_idx in 0..(len - 1) {
-                    for group_col_values in &group_columns {
-                        if !group_col_values.equal_at_idxs(row_idx, row_idx + 1) {
-                            group_offsets.push(row_idx + 1);
-                            continue;
-                        }
+                    let next_is_different = group_columns
+                        .iter()
+                        .map(|vals| vals.equal_at_idxs(row_idx, row_idx + 1))
+                        .any(|is_equal| !is_equal);
+                    if next_is_different {
+                        group_offsets.push(row_idx);
                     }
                 }
+                group_offsets.push(len - 1);
 
                 for col_name in self.schema.columns.keys() {
                     let parent_idx = parent.get_idx(col_name)?;
                     let parent_entry = pool.get_entry(&parent_idx)?;
                     let idx = self.get_idx(col_name)?;
                     if col_names.contains(col_name) {
-                        pool.set_values(idx, parent_entry.values.distinct(), false);
+                        pool.set_values(
+                            idx,
+                            parent_entry.values.keep(&group_offsets),
+                            parent_entry.sorted,
+                        );
                     } else {
                         pool.set_values(idx, parent_entry.values.group_by(&group_offsets), false);
                     }

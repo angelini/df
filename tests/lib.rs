@@ -70,6 +70,7 @@ fn test_filter_select() {
 }
 
 #[test]
+#[allow(unused_attributes)]
 #[rustfmt_skip]
 fn test_order_by() {
     let mut pool = Pool::default();
@@ -101,7 +102,7 @@ fn test_order_by_multiple_columns() {
 }
 
 #[test]
-fn test_group_only_keys() {
+fn test_group_by_only_keys() {
     let mut pool = Pool::default();
     let df = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
     let output = df.group_by(&["int"]);
@@ -109,8 +110,9 @@ fn test_group_only_keys() {
 }
 
 #[test]
+#[allow(unused_attributes)]
 #[rustfmt_skip]
-fn test_group() {
+fn test_group_by() {
     let mut pool = Pool::default();
     let df = from_vecs!(&mut pool,
                         ("1_int", Type::Int, vec![3, 2, 1, 2]),
@@ -122,6 +124,25 @@ fn test_group() {
         (1, vec![true]),
         (2, vec![false, true]),
         (3, vec![true])
+    );
+}
+
+#[test]
+fn test_group_by_multiple_columns() {
+    let mut pool = Pool::default();
+    let df =
+        from_vecs!(&mut pool,
+                        ("1_int", Type::Int, vec![3, 2, 1, 2, 2]),
+                        ("2_int", Type::Int, vec![4, 3, 2, 1, 3]),
+                        ("3_bool", Type::Boolean, vec![true, false, true, false, true]));
+    let output = df.group_by(&["1_int", "2_int"]);
+    assert_df_eq!(
+        &mut pool,
+        check(output),
+        (1, 2, vec![true]),
+        (2, 1, vec![false]),
+        (2, 3, vec![false, true]),
+        (3, 4, vec![true])
     );
 }
 
