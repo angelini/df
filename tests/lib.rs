@@ -65,10 +65,7 @@ fn test_filter_select() {
         ("bool", Type::Boolean, vec![true, false, true]),
         ("int", Type::Int, vec![1, 2, 3])
     );
-    let output = || {
-        df.filter("int", predicate!(== 2))?
-            .select(&["bool"])
-    };
+    let output = || df.filter("int", predicate!(== 2))?.select(&["bool"]);
     assert_df_eq!(&mut pool, check(output()), (false));
 }
 
@@ -76,13 +73,31 @@ fn test_filter_select() {
 #[rustfmt_skip]
 fn test_sort() {
     let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool, ("1_int", Type::Int, vec![4, 1, 6]), (
-        "2_int",
-        Type::Int,
-        vec![1, 2, 3]
-    ));
+    let df = from_vecs!(&mut pool,
+                        ("1_int", Type::Int, vec![4, 1, 6]),
+                        ("2_int", Type::Int, vec![1, 2, 3]));
     let output = df.sort(&["1_int"]);
     assert_df_eq!(&mut pool, check(output), (1, 2), (4, 1), (6, 3));
+}
+
+#[test]
+fn test_sort_multiple_columns() {
+    let mut pool = Pool::default();
+    let df =
+        from_vecs!(&mut pool,
+                   ("1_int", Type::Int, vec![4, 1, 6, 4, 1]),
+                   ("2_int", Type::Int, vec![3, 1, 1, 1, 2]),
+                   ("3_int", Type::Int, vec![1, 2, 3, 4, 5]));
+    let output = df.sort(&["1_int", "2_int"]);
+    assert_df_eq!(
+        &mut pool,
+        check(output),
+        (1, 1, 2),
+        (1, 2, 5),
+        (4, 1, 4),
+        (4, 3, 1),
+        (6, 1, 3)
+    );
 }
 
 #[test]
@@ -97,11 +112,9 @@ fn test_group_only_keys() {
 #[rustfmt_skip]
 fn test_group() {
     let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool, ("1_int", Type::Int, vec![3, 2, 1, 2]), (
-        "2_bool",
-        Type::Boolean,
-        vec![true, false, true, true]
-    ));
+    let df = from_vecs!(&mut pool,
+                        ("1_int", Type::Int, vec![3, 2, 1, 2]),
+                        ("2_bool", Type::Boolean, vec![true, false, true, true]));
     let output = df.group_by(&["1_int"]);
     assert_df_eq!(
         &mut pool,

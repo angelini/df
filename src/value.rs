@@ -1,4 +1,5 @@
 use decorum::R64;
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 use std::result;
@@ -263,13 +264,13 @@ impl Values {
 
     pub fn sort(
         &self,
-        parent_sorting: &Option<&[usize]>,
-        only_use_parent: bool,
-    ) -> (Vec<usize>, Values) {
+        sort_scores: &Option<HashMap<usize, usize>>,
+        only_use_scores: bool,
+    ) -> (HashMap<usize, usize>, Values) {
         sort!(
             self,
-            parent_sorting,
-            only_use_parent,
+            sort_scores,
+            only_use_scores,
             List,
             Boolean,
             Int,
@@ -298,26 +299,39 @@ impl Values {
 
     fn gen_sort<T: Clone + Ord>(
         values: &[T],
-        parent_sorting: &Option<&[usize]>,
-        only_use_parent: bool,
-    ) -> (Vec<usize>, Vec<T>) {
+        sort_scores: &Option<HashMap<usize, usize>>,
+        only_use_score: bool,
+    ) -> (HashMap<usize, usize>, Vec<T>) {
+        if values.is_empty() {
+            return (HashMap::new(), vec![]);
+        }
         let mut sorted = values.iter().enumerate().collect::<Vec<(usize, &T)>>();
         sorted.sort_by(|&(left_idx, left_value), &(right_idx, right_value)| {
-            match *parent_sorting {
-                Some(sort_indices) => {
-                    let left_sort = sort_indices[left_idx];
-                    let right_sort = sort_indices[right_idx];
-                    if left_sort == right_sort && !only_use_parent {
+            match *sort_scores {
+                Some(ref sort_scores) => {
+                    let left_score = sort_scores[&left_idx];
+                    let right_score = sort_scores[&right_idx];
+                    if left_score == right_score && !only_use_score {
                         left_value.cmp(right_value)
                     } else {
-                        left_sort.cmp(&right_sort)
+                        left_score.cmp(&right_score)
                     }
                 }
                 None => left_value.cmp(right_value),
             }
         });
+        let mut new_scores = HashMap::new();
+        new_scores.insert(sorted[0].0, 0);
+        for (idx, &(row_idx, value)) in sorted.iter().enumerate().skip(1) {
+            let previous_score = new_scores[&sorted[idx - 1].0];
+            if value == sorted[idx - 1].1 {
+                new_scores.insert(row_idx, previous_score);
+            } else {
+                new_scores.insert(row_idx, previous_score + 1);
+            }
+        }
         (
-            sorted.iter().map(|&(k, _)| k).collect(),
+            new_scores,
             sorted.into_iter().map(|(_, v)| v.clone()).collect(),
         )
     }

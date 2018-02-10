@@ -70,9 +70,7 @@ pub struct Row {
 
 impl Row {
     pub fn new(values: Vec<Value>) -> Row {
-        Row {
-            values
-        }
+        Row { values }
     }
 }
 
@@ -192,9 +190,12 @@ impl DataFrame {
 
     pub fn sort(&self, column_names: &[&str]) -> Result<DataFrame> {
         if self.sorted_by == column_names {
-            return Ok(self.clone())
+            return Ok(self.clone());
         }
-        let col_name_strings = column_names.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let col_name_strings = column_names
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
         let operation = Operation::Sort(col_name_strings.clone());
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &self.pool_indices),
@@ -209,14 +210,19 @@ impl DataFrame {
 
     pub fn group_by(&self, column_names: &[&str]) -> Result<DataFrame> {
         if self.grouped_by == column_names {
-            return Ok(self.clone())
+            return Ok(self.clone());
         }
         let sorted = if self.sorted_by == column_names {
             self.clone()
         } else {
             self.sort(column_names)?
         };
-        let operation = Operation::GroupBy(column_names.iter().map(|s| s.to_string()).collect::<Vec<String>>());
+        let operation = Operation::GroupBy(
+            column_names
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>(),
+        );
         let columns = sorted
             .schema
             .columns
@@ -248,29 +254,28 @@ impl DataFrame {
             let overlap = &aggregate_keys & &group_keys;
             if !overlap.is_empty() {
                 return Err(Error::AggregatesOnGroupColumn(
-                    overlap.iter().map(|s| s.to_string()).collect()
+                    overlap.iter().map(|s| s.to_string()).collect(),
                 ));
             }
-            let missing = &(&HashSet::from_iter(self.schema.columns.keys()) - &aggregate_keys) - &group_keys;
+            let missing = &(&HashSet::from_iter(self.schema.columns.keys()) - &aggregate_keys) -
+                &group_keys;
             if !missing.is_empty() {
                 return Err(Error::MissingAggregates(
-                    missing.iter().map(|s| s.to_string()).collect()
+                    missing.iter().map(|s| s.to_string()).collect(),
                 ));
             }
         }
         let columns = self.schema
             .columns
             .iter()
-            .map(|(name, column)| {
-                if aggregators.contains_key(name) {
-                    let aggregator = &aggregators[name];
-                    Ok((
-                        name.clone(),
-                        Column::new(aggregator.output_type(&column.type_)?),
-                    ))
-                } else {
-                    Ok((name.clone(), column.clone()))
-                }
+            .map(|(name, column)| if aggregators.contains_key(name) {
+                let aggregator = &aggregators[name];
+                Ok((
+                    name.clone(),
+                    Column::new(aggregator.output_type(&column.type_)?),
+                ))
+            } else {
+                Ok((name.clone(), column.clone()))
             })
             .collect::<Result<BTreeMap<String, Column>>>()?;
         let operation = Operation::Aggregation(aggregators.clone());
@@ -380,23 +385,19 @@ impl DataFrame {
                 }
             }
             Operation::Sort(ref col_names) => {
-                let mut parent_sorting: Option<Vec<usize>> = None;
+                let mut sort_scores: Option<HashMap<usize, usize>> = None;
                 for col_name in col_names {
                     let col_idx = parent.get_idx(col_name)?;
                     let entry = pool.get_entry(&col_idx)?;
-                    let (sort_indices, values) =
-                        entry.values.sort(
-                            &parent_sorting.as_ref().map(|s| s.as_slice()),
-                            false,
-                        );
+                    let (sort_indices, values) = entry.values.sort(&sort_scores, false);
                     pool.set_values(
                         operation.hash_from_seed(&col_idx, col_name),
                         values,
-                        parent_sorting.is_none(),
+                        sort_scores.is_none(),
                     );
-                    parent_sorting = Some(sort_indices);
+                    sort_scores = Some(sort_indices);
                 }
-                match parent_sorting {
+                match sort_scores {
                     Some(_) => {
                         let missing: HashSet<&String> =
                             &HashSet::from_iter(self.schema.columns.keys()) -
@@ -404,11 +405,7 @@ impl DataFrame {
                         for col_name in missing {
                             let idx = parent.get_idx(col_name)?;
                             let entry = pool.get_entry(&idx)?;
-                            let (_, values) =
-                                entry.values.sort(
-                                    &parent_sorting.as_ref().map(|s| s.as_slice()),
-                                    true,
-                                );
+                            let (_, values) = entry.values.sort(&sort_scores, true);
                             pool.set_values(
                                 operation.hash_from_seed(&idx, col_name),
                                 values,
@@ -444,11 +441,7 @@ impl DataFrame {
                     let parent_entry = pool.get_entry(&parent_idx)?;
                     let idx = self.get_idx(col_name)?;
                     if col_names.contains(col_name) {
-                        pool.set_values(
-                            idx,
-                            parent_entry.values.distinct(),
-                            false,
-                        );
+                        pool.set_values(idx, parent_entry.values.distinct(), false);
                     } else {
                         pool.set_values(idx, parent_entry.values.group_by(&group_offsets), false);
                     }
@@ -460,11 +453,7 @@ impl DataFrame {
                     let entry = pool.get_entry(idx)?;
                     if aggregators.contains_key(col_name) {
                         let aggregator = &aggregators[col_name];
-                        pool.set_values(
-                            new_idx,
-                            aggregator.aggregate(entry.values)?,
-                            false,
-                        )
+                        pool.set_values(new_idx, aggregator.aggregate(entry.values)?, false)
                     } else {
                         pool.set_values(new_idx, entry.values, entry.sorted)
                     }
