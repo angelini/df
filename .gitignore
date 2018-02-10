@@ -2,3 +2,5 @@
 **/*.rs.bk
 .idea/*
 df.iml
+data/*_full.csv
+Cargo.lock

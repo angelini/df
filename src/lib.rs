@@ -4,11 +4,15 @@
 
 extern crate csv;
 extern crate decorum;
+#[macro_use]
+extern crate lazy_static;
 extern crate rand;
+extern crate time;
 
 pub mod aggregate;
 pub mod dataframe;
 pub mod pool;
+pub mod timer;
 pub mod value;
 
 use std::collections::HashMap;
@@ -72,6 +76,7 @@ macro_rules! from_vecs {
 #[derive(Debug)]
 pub enum Error {
     Csv(csv::Error),
+    DataFrame(dataframe::Error),
     Io(io::Error),
     Value(value::Error),
 }
@@ -79,6 +84,12 @@ pub enum Error {
 impl From<csv::Error> for Error {
     fn from(error: csv::Error) -> Error {
         Error::Csv(error)
+    }
+}
+
+impl From<dataframe::Error> for Error {
+    fn from(error: dataframe::Error) -> Error {
+        Error::DataFrame(error)
     }
 }
 
@@ -97,6 +108,7 @@ impl From<value::Error> for Error {
 type Result<T> = result::Result<T, Error>;
 
 pub fn from_csv(pool: &mut Pool, path: &Path, schema: &Schema) -> Result<DataFrame> {
+    timer::start(1, "from_csv");
     let file = File::open(path)?;
     let mut csv_reader = csv::ReaderBuilder::new()
         .has_headers(false)
@@ -116,5 +128,6 @@ pub fn from_csv(pool: &mut Pool, path: &Path, schema: &Schema) -> Result<DataFra
             Ok((name.to_string(), Values::convert_from_strings(type_, &vals)?))
         })
         .collect::<result::Result<HashMap<String, Values>, value::Error>>()?;
+    timer::stop(1);
     Ok(DataFrame::new(pool, schema.clone(), values))
 }

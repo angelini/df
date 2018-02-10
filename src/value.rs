@@ -266,7 +266,6 @@ pub enum Values {
 
 impl Values {
     pub fn convert_from_strings(type_: &Type, values: &[String]) -> Result<Values> {
-        println!("values: {:?}", values);
         let values = match *type_ {
             Type::Boolean => Values::from(
                 values
