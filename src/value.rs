@@ -1,17 +1,42 @@
 use decorum::R64;
+
 use std::collections::HashMap;
 use std::fmt;
+use std::num;
 use std::rc::Rc;
 use std::result;
+use std::str;
 
 #[derive(Debug)]
 pub enum Error {
+    ParseError(Type, String),
     PredicateAndValueTypes(Type, Type),
+}
+
+impl From<str::ParseBoolError> for Error {
+    fn from(error: str::ParseBoolError) -> Error {
+        Error::ParseError(Type::Boolean, format!("{:?}", error))
+    }
+}
+
+impl From<num::ParseIntError> for Error {
+    fn from(error: num::ParseIntError) -> Error {
+        Error::ParseError(Type::Int, format!("{:?}", error))
+    }
+}
+
+impl From<num::ParseFloatError> for Error {
+    fn from(error: num::ParseFloatError) -> Error {
+        Error::ParseError(Type::Float, format!("{:?}", error))
+    }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            Error::ParseError(ref type_, ref message) => {
+                write!(f, "Error parsing value of type {:?}: {}", type_, message)
+            }
             Error::PredicateAndValueTypes(ref predicate_type, ref value_type) => {
                 write!(
                     f,
@@ -240,6 +265,44 @@ pub enum Values {
 }
 
 impl Values {
+    pub fn convert_from_strings(type_: &Type, values: &[String]) -> Result<Values> {
+        println!("values: {:?}", values);
+        let values = match *type_ {
+            Type::Boolean => Values::from(
+                values
+                    .into_iter()
+                    .map(|v| v.parse::<bool>())
+                    .collect::<result::Result<Vec<bool>, str::ParseBoolError>>()?
+            ),
+            Type::Int => Values::from(
+                values
+                    .into_iter()
+                    .map(|v| v.parse::<u64>())
+                    .collect::<result::Result<Vec<u64>, num::ParseIntError>>()?
+            ),
+            Type::Float => {
+                let floats = values
+                    .into_iter()
+                    .map(|v| v.parse::<f64>())
+                    .collect::<result::Result<Vec<f64>, num::ParseFloatError>>()?;
+                Values::from(
+                    floats
+                        .into_iter()
+                        .map(R64::from_inner)
+                        .collect::<Vec<R64>>(),
+                )
+            }
+            Type::String => Values::from(
+                values
+                    .into_iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>(),
+            ),
+            Type::List(_) => unimplemented!(),
+        };
+        Ok(values)
+    }
+
     pub fn type_(&self) -> Type {
         match *self {
             Values::Boolean(_) => Type::Boolean,

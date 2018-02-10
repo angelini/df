@@ -77,8 +77,8 @@ impl Row {
 }
 
 #[derive(Clone, Debug)]
-struct Column {
-    type_: Type,
+pub struct Column {
+    pub type_: Type,
 }
 
 impl Column {
@@ -89,7 +89,7 @@ impl Column {
 
 #[derive(Clone, Debug)]
 pub struct Schema {
-    columns: BTreeMap<String, Column>,
+    pub columns: BTreeMap<String, Column>,
 }
 
 impl Schema {

@@ -5,5 +5,7 @@ authors = ["Alex Angelini <alex.louis.angelini@gmail.com>"]
 
 [dependencies]
 clippy = "*"
+csv = "1.0.0-beta.5"
 decorum = "0.0.8"
 rand = "0.4.2"
+tempdir = "0.3"

@@ -1,10 +1,20 @@
 #![feature(custom_attribute)]
 
+extern crate decorum;
+extern crate tempdir;
+
 #[macro_use]
 extern crate df;
 
+use decorum::R64;
+use tempdir::TempDir;
+
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+
 use df::aggregate::Aggregator;
-use df::dataframe::{DataFrame, Result};
+use df::dataframe::{DataFrame, Result, Schema};
 use df::pool::Pool;
 use df::value::Type;
 
@@ -20,6 +30,15 @@ macro_rules! assert_df_eq {
 
 fn check(result: Result<DataFrame>) -> DataFrame {
     result.expect("Cannot build dataframe")
+}
+
+fn write_csv(dir: &TempDir, name: &str, rows: &[&str]) -> PathBuf {
+    let path = dir.path().join(name);
+    let mut file = File::create(path.clone()).unwrap();
+    for row in rows {
+        writeln!(file, "{}", row).unwrap()
+    }
+    path
 }
 
 #[test]
@@ -224,4 +243,22 @@ fn test_pool_clean() {
     assert_eq!(pool.size(), 4);
     assert_eq!(pool.clean(), 4);
     assert_eq!(pool.size(), 0);
+}
+
+#[test]
+fn test_from_csv() {
+    let dir = TempDir::new("test_from_csv").unwrap();
+    let path = write_csv(&dir, "example.csv", &[
+        "true|1|1.0|hello world",
+        "false|4|1.2|fOObAr"
+    ]);
+    let mut pool = Pool::default();
+    let schema = Schema::new(
+        &["1_bool", "2_int", "3_float", "4_string"],
+        &[Type::Boolean, Type::Int, Type::Float, Type::String],
+    );
+    let df = df::from_csv(&mut pool, path.as_path(), &schema);
+    assert_df_eq!(&mut pool, df.expect("Cannot build df from csv"),
+                  (true, 1, R64::from_inner(1.0), "hello world".to_string()),
+                  (false, 4, R64::from_inner(1.2), "fOObAr".to_string()));
 }

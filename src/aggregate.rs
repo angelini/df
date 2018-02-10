@@ -1,6 +1,5 @@
 use std::fmt;
 use std::result;
-
 use decorum::R64;
 
 use value::{ListValues, Type, Value, Values};
