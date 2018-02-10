@@ -71,24 +71,24 @@ fn test_filter_select() {
 
 #[test]
 #[rustfmt_skip]
-fn test_sort() {
+fn test_order_by() {
     let mut pool = Pool::default();
     let df = from_vecs!(&mut pool,
                         ("1_int", Type::Int, vec![4, 1, 6]),
                         ("2_int", Type::Int, vec![1, 2, 3]));
-    let output = df.sort(&["1_int"]);
+    let output = df.order_by(&["1_int"]);
     assert_df_eq!(&mut pool, check(output), (1, 2), (4, 1), (6, 3));
 }
 
 #[test]
-fn test_sort_multiple_columns() {
+fn test_order_by_multiple_columns() {
     let mut pool = Pool::default();
     let df =
         from_vecs!(&mut pool,
                    ("1_int", Type::Int, vec![4, 1, 6, 4, 1]),
                    ("2_int", Type::Int, vec![3, 1, 1, 1, 2]),
                    ("3_int", Type::Int, vec![1, 2, 3, 4, 5]));
-    let output = df.sort(&["1_int", "2_int"]);
+    let output = df.order_by(&["1_int", "2_int"]);
     assert_df_eq!(
         &mut pool,
         check(output),
@@ -179,8 +179,8 @@ fn test_pool_clean() {
     assert_eq!(pool.size(), 0);
     let df = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
     let df2 = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
-    check(df.sort(&["int"])).collect(&mut pool).unwrap();
-    check(df2.sort(&["int"])).collect(&mut pool).unwrap();
+    check(df.order_by(&["int"])).collect(&mut pool).unwrap();
+    check(df2.order_by(&["int"])).collect(&mut pool).unwrap();
     assert_eq!(pool.size(), 4);
     assert_eq!(pool.clean(), 4);
     assert_eq!(pool.size(), 0);

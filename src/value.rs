@@ -194,14 +194,14 @@ macro_rules! select_by_idx {
     };
 }
 
-macro_rules! sort {
+macro_rules! order_by {
     ( $v:expr, $p:expr, $o:expr, $l:ident, $( $t:ident ),* ) => {
         match *$v {
             Values::$l(_) => unimplemented!(),
             $(
                 Values::$t(ref values) => {
-                    let (indices, sorted_values) = Values::gen_sort(values, $p, $o);
-                    (indices, Values::from(sorted_values))
+                    let (indices, ordered_values) = Values::gen_order_by(values, $p, $o);
+                    (indices, Values::from(ordered_values))
                 }
             )*
         }
@@ -262,12 +262,12 @@ impl Values {
         select_by_idx!(self, indices, List, Boolean, Int, Float, String)
     }
 
-    pub fn sort(
+    pub fn order_by(
         &self,
         sort_scores: &Option<HashMap<usize, usize>>,
         only_use_scores: bool,
     ) -> (HashMap<usize, usize>, Values) {
-        sort!(
+        order_by!(
             self,
             sort_scores,
             only_use_scores,
@@ -297,7 +297,7 @@ impl Values {
         distinct!(self, List, Boolean, Int, Float, String)
     }
 
-    fn gen_sort<T: Clone + Ord>(
+    fn gen_order_by<T: Clone + Ord>(
         values: &[T],
         sort_scores: &Option<HashMap<usize, usize>>,
         only_use_score: bool,

@@ -1,4 +1,4 @@
-#![feature(box_syntax, box_patterns, plugin)]
+#![feature(box_syntax, box_patterns, plugin, conservative_impl_trait, universal_impl_trait)]
 
 #![plugin(clippy)]
 

@@ -15,7 +15,7 @@ pub enum Error {
     AggregatesOnGroupColumn(Vec<String>),
     MissingAggregates(Vec<String>),
     MissingColumnInIndices(String),
-    SortingWithNoSortColumns,
+    OrderByWithNoSortColumns,
     EmptyIndices,
     Aggregate(aggregate::Error),
     Pool(pool::Error),
@@ -52,7 +52,7 @@ impl fmt::Display for Error {
             Error::MissingColumnInIndices(ref col_name) => {
                 write!(f, "Missing column in indices {}", col_name)
             }
-            Error::SortingWithNoSortColumns => write!(f, "Sort called without any sort columns"),
+            Error::OrderByWithNoSortColumns => write!(f, "Order by called without any sort columns"),
             Error::EmptyIndices => write!(f, "Empty pool indices"),
             Error::Aggregate(ref error) => write!(f, "{}", error),
             Error::Pool(ref error) => write!(f, "{}", error),
@@ -114,7 +114,7 @@ impl Schema {
 enum Operation {
     Select(Vec<String>),
     Filter(String, Predicate),
-    Sort(Vec<String>),
+    OrderBy(Vec<String>),
     GroupBy(Vec<String>),
     Aggregation(BTreeMap<String, Aggregator>),
 }
@@ -135,7 +135,7 @@ pub struct DataFrame {
     parent: Option<Box<DataFrame>>,
     operation: Option<Operation>,
     grouped_by: Vec<String>,
-    sorted_by: Vec<String>,
+    ordered_by: Vec<String>,
     pool_indices: BTreeMap<String, u64>,
     ref_counts: RefCounts,
 }
@@ -151,7 +151,7 @@ impl DataFrame {
             pool_indices,
             parent: None,
             operation: None,
-            sorted_by: vec![],
+            ordered_by: vec![],
             grouped_by: vec![],
             ref_counts: pool.clone_ref_counts(),
         }
@@ -169,7 +169,7 @@ impl DataFrame {
             schema: self.schema.select(column_names),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-            sorted_by: self.sorted_by.clone(),
+            ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),
             ref_counts: Rc::clone(&self.ref_counts),
         })
@@ -182,27 +182,27 @@ impl DataFrame {
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-            sorted_by: self.sorted_by.clone(),
+            ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),
             ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
-    pub fn sort(&self, column_names: &[&str]) -> Result<DataFrame> {
-        if self.sorted_by == column_names {
+    pub fn order_by(&self, column_names: &[&str]) -> Result<DataFrame> {
+        if self.ordered_by == column_names {
             return Ok(self.clone());
         }
         let col_name_strings = column_names
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
-        let operation = Operation::Sort(col_name_strings.clone());
+        let operation = Operation::OrderBy(col_name_strings.clone());
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: self.schema.clone(),
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-            sorted_by: col_name_strings,
+            ordered_by: col_name_strings,
             grouped_by: self.grouped_by.clone(),
             ref_counts: Rc::clone(&self.ref_counts),
         })
@@ -212,10 +212,10 @@ impl DataFrame {
         if self.grouped_by == column_names {
             return Ok(self.clone());
         }
-        let sorted = if self.sorted_by == column_names {
+        let ordered = if self.ordered_by == column_names {
             self.clone()
         } else {
-            self.sort(column_names)?
+            self.order_by(column_names)?
         };
         let operation = Operation::GroupBy(
             column_names
@@ -223,7 +223,7 @@ impl DataFrame {
                 .map(|s| s.to_string())
                 .collect::<Vec<String>>(),
         );
-        let columns = sorted
+        let columns = ordered
             .schema
             .columns
             .iter()
@@ -237,13 +237,13 @@ impl DataFrame {
             })
             .collect::<BTreeMap<String, Column>>();
         Ok(DataFrame {
-            pool_indices: Self::new_indices(&operation, &sorted.pool_indices),
+            pool_indices: Self::new_indices(&operation, &ordered.pool_indices),
             schema: Schema { columns },
-            parent: Some(Box::new(sorted.clone())),
+            parent: Some(Box::new(ordered.clone())),
             operation: Some(operation),
-            sorted_by: sorted.sorted_by.clone(),
-            grouped_by: sorted.sorted_by.clone(),
-            ref_counts: Rc::clone(&sorted.ref_counts),
+            ordered_by: ordered.ordered_by.clone(),
+            grouped_by: ordered.ordered_by.clone(),
+            ref_counts: Rc::clone(&ordered.ref_counts),
         })
     }
 
@@ -284,7 +284,7 @@ impl DataFrame {
             schema: Schema { columns },
             parent: Some(Box::new(self.clone())),
             operation: Some(operation),
-            sorted_by: self.sorted_by.clone(),
+            ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),
             ref_counts: Rc::clone(&self.ref_counts),
         })
@@ -384,12 +384,12 @@ impl DataFrame {
                     }
                 }
             }
-            Operation::Sort(ref col_names) => {
+            Operation::OrderBy(ref col_names) => {
                 let mut sort_scores: Option<HashMap<usize, usize>> = None;
                 for col_name in col_names {
                     let col_idx = parent.get_idx(col_name)?;
                     let entry = pool.get_entry(&col_idx)?;
-                    let (sort_indices, values) = entry.values.sort(&sort_scores, false);
+                    let (sort_indices, values) = entry.values.order_by(&sort_scores, false);
                     pool.set_values(
                         operation.hash_from_seed(&col_idx, col_name),
                         values,
@@ -405,7 +405,7 @@ impl DataFrame {
                         for col_name in missing {
                             let idx = parent.get_idx(col_name)?;
                             let entry = pool.get_entry(&idx)?;
-                            let (_, values) = entry.values.sort(&sort_scores, true);
+                            let (_, values) = entry.values.order_by(&sort_scores, true);
                             pool.set_values(
                                 operation.hash_from_seed(&idx, col_name),
                                 values,
@@ -413,7 +413,7 @@ impl DataFrame {
                             );
                         }
                     }
-                    None => return Err(Error::SortingWithNoSortColumns),
+                    None => return Err(Error::OrderByWithNoSortColumns),
                 }
             }
             Operation::GroupBy(ref col_names) => {
