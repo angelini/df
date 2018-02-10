@@ -78,7 +78,7 @@ impl Aggregator {
                     Boolean,
                     bool,
                     Int,
-                    u64,
+                    i64,
                     Float,
                     R64,
                     String,
@@ -94,7 +94,7 @@ impl Aggregator {
                                     values
                                         .iter()
                                         .map(|vs| vs.iter().sum())
-                                        .collect::<Vec<u64>>(),
+                                        .collect::<Vec<i64>>(),
                                 )
                             }
                             ListValues::Float(ref values) => {
@@ -124,7 +124,7 @@ impl Aggregator {
                     Boolean,
                     bool,
                     Int,
-                    u64,
+                    i64,
                     Float,
                     R64,
                     String,
@@ -138,7 +138,7 @@ impl Aggregator {
                     Boolean,
                     bool,
                     Int,
-                    u64,
+                    i64,
                     Float,
                     R64,
                     String,

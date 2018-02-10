@@ -63,11 +63,11 @@ pub enum Type {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Value {
     Boolean(bool),
-    Int(u64),
+    Int(i64),
     Float(R64),
     String(String),
     BooleanList(Vec<bool>),
-    IntList(Vec<u64>),
+    IntList(Vec<i64>),
     FloatList(Vec<R64>),
     StringList(Vec<String>),
 }
@@ -106,8 +106,8 @@ impl From<bool> for Value {
     }
 }
 
-impl From<u64> for Value {
-    fn from(value: u64) -> Self {
+impl From<i64> for Value {
+    fn from(value: i64) -> Self {
         Value::Int(value)
     }
 }
@@ -130,8 +130,8 @@ impl From<Vec<bool>> for Value {
     }
 }
 
-impl From<Vec<u64>> for Value {
-    fn from(value: Vec<u64>) -> Self {
+impl From<Vec<i64>> for Value {
+    fn from(value: Vec<i64>) -> Self {
         Value::IntList(value)
     }
 }
@@ -160,7 +160,7 @@ fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
 #[derive(Clone, Debug)]
 pub enum ListValues {
     Boolean(Vec<Vec<bool>>),
-    Int(Vec<Vec<u64>>),
+    Int(Vec<Vec<i64>>),
     Float(Vec<Vec<R64>>),
     String(Vec<Vec<String>>),
 }
@@ -258,7 +258,7 @@ macro_rules! keep {
 #[derive(Clone, Debug)]
 pub enum Values {
     Boolean(Rc<Vec<bool>>),
-    Int(Rc<Vec<u64>>),
+    Int(Rc<Vec<i64>>),
     Float(Rc<Vec<R64>>),
     String(Rc<Vec<String>>),
     List(Rc<ListValues>),
@@ -276,8 +276,8 @@ impl Values {
             Type::Int => Values::from(
                 values
                     .into_iter()
-                    .map(|v| v.parse::<u64>())
-                    .collect::<result::Result<Vec<u64>, num::ParseIntError>>()?
+                    .map(|v| v.parse::<i64>())
+                    .collect::<result::Result<Vec<i64>, num::ParseIntError>>()?
             ),
             Type::Float => {
                 let floats = values
@@ -427,8 +427,8 @@ impl From<Vec<bool>> for Values {
     }
 }
 
-impl From<Vec<u64>> for Values {
-    fn from(values: Vec<u64>) -> Self {
+impl From<Vec<i64>> for Values {
+    fn from(values: Vec<i64>) -> Self {
         Values::Int(Rc::new(values))
     }
 }
