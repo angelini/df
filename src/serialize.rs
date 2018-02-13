@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::path::Path;
-use std::result;
 
 use csv;
 
@@ -43,7 +42,7 @@ impl From<value::Error> for Error {
     }
 }
 
-type Result<T> = result::Result<T, Error>;
+type Result<T> = ::std::result::Result<T, Error>;
 
 pub fn from_csv(pool: &mut Pool, path: &Path, schema: &Schema) -> Result<DataFrame> {
     timer::start(101, "from_csv - read file");
@@ -71,7 +70,7 @@ pub fn from_csv(pool: &mut Pool, path: &Path, schema: &Schema) -> Result<DataFra
                 Values::convert_from_strings(type_, &vals)?,
             ))
         })
-        .collect::<result::Result<HashMap<String, Values>, value::Error>>()?;
+        .collect::<::std::result::Result<HashMap<String, Values>, value::Error>>()?;
     timer::stop(102);
     Ok(DataFrame::new(pool, schema.clone(), values))
 }

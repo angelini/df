@@ -72,7 +72,7 @@ fn test_filter_eq() {
         ("bool", Type::Boolean, vec![true, false, true]),
         ("int", Type::Int, vec![1, 2, 3])
     );
-    let output = df.filter("int", predicate!(== 2));
+    let output = df.filter("int", &predicate!(== 2));
     assert_df_eq!(&mut pool, check(output), (false, 2));
 }
 
@@ -84,7 +84,7 @@ fn test_filter_select() {
         ("bool", Type::Boolean, vec![true, false, true]),
         ("int", Type::Int, vec![1, 2, 3])
     );
-    let output = || df.filter("int", predicate!(== 2))?.select(&["bool"]);
+    let output = || df.filter("int", &predicate!(== 2))?.select(&["bool"]);
     assert_df_eq!(&mut pool, check(output()), (false));
 }
 
@@ -230,19 +230,6 @@ fn test_agg_multiple_columns() {
         Aggregator::Max
     ));
     assert_df_eq!(&mut pool, check(output), (16, 1, 5));
-}
-
-#[test]
-fn test_pool_clean() {
-    let mut pool = Pool::default();
-    assert_eq!(pool.size(), 0);
-    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
-    let df2 = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
-    check(df.order_by(&["int"])).collect(&mut pool).unwrap();
-    check(df2.order_by(&["int"])).collect(&mut pool).unwrap();
-    assert_eq!(pool.size(), 4);
-    assert_eq!(pool.clean(), 4);
-    assert_eq!(pool.size(), 0);
 }
 
 #[test]

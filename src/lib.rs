@@ -4,8 +4,10 @@
 
 extern crate csv;
 extern crate decorum;
+extern crate futures;
 #[macro_use]
 extern crate lazy_static;
+extern crate hyper;
 extern crate rand;
 extern crate serde;
 #[macro_use]
@@ -14,6 +16,7 @@ extern crate serde_json;
 extern crate time;
 
 pub mod aggregate;
+pub mod api;
 pub mod dataframe;
 pub mod pool;
 pub mod timer;

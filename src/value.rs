@@ -59,7 +59,7 @@ pub enum Type {
     List(Box<Type>),
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Value {
     Boolean(bool),
     Int(i64),
@@ -465,7 +465,7 @@ impl From<Value> for Values {
     }
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Deserialize, Hash, Serialize)]
 pub enum Comparator {
     Equal,
     GreaterThan,
@@ -501,7 +501,7 @@ macro_rules! filter {
     };
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Deserialize, Hash, Serialize)]
 pub struct Predicate {
     comparator: Comparator,
     value: Value,

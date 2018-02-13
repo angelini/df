@@ -1,5 +1,4 @@
 use std::fmt;
-use std::result;
 
 use decorum::R64;
 
@@ -20,7 +19,7 @@ impl fmt::Display for Error {
     }
 }
 
-type Result<T> = result::Result<T, Error>;
+type Result<T> = ::std::result::Result<T, Error>;
 
 macro_rules! simple_aggregate {
     ( $i:expr, $f:ident, $( $t:ident, $pt:ty ),* ) => {
@@ -43,7 +42,7 @@ macro_rules! simple_aggregate {
         }
     };
 }
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Deserialize, Hash, Serialize)]
 pub enum Aggregator {
     First,
     Sum,

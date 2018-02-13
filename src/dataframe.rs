@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::result;
 
 use aggregate::{self, Aggregator};
-use pool::{self, Pool, RefCounts};
+use pool::{self, Pool};
 use value::{self, Predicate, Type, Value, Values};
 
 #[derive(Debug)]
@@ -139,8 +139,8 @@ impl IntoIterator for Schema {
     }
 }
 
-#[derive(Clone, Debug, Hash)]
-enum Operation {
+#[derive(Clone, Debug, Deserialize, Hash, Serialize)]
+pub enum Operation {
     Select(Vec<String>),
     Filter(String, Predicate),
     OrderBy(Vec<String>),
@@ -158,7 +158,7 @@ impl Operation {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct DataFrame {
     pub schema: Schema,
     parent: Option<Box<DataFrame>>,
@@ -166,7 +166,6 @@ pub struct DataFrame {
     grouped_by: Vec<String>,
     ordered_by: Vec<String>,
     pool_indices: BTreeMap<String, u64>,
-    ref_counts: RefCounts,
 }
 
 impl DataFrame {
@@ -182,7 +181,6 @@ impl DataFrame {
             operation: None,
             ordered_by: vec![],
             grouped_by: vec![],
-            ref_counts: pool.clone_ref_counts(),
         }
     }
 
@@ -200,12 +198,11 @@ impl DataFrame {
             operation: Some(operation),
             ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),
-            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
-    pub fn filter(&self, filter_column_name: &str, predicate: Predicate) -> Result<DataFrame> {
-        let operation = Operation::Filter(filter_column_name.to_string(), predicate);
+    pub fn filter(&self, filter_column_name: &str, predicate: &Predicate) -> Result<DataFrame> {
+        let operation = Operation::Filter(filter_column_name.to_string(), predicate.clone());
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: self.schema.clone(),
@@ -213,7 +210,6 @@ impl DataFrame {
             operation: Some(operation),
             ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),
-            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
@@ -233,7 +229,6 @@ impl DataFrame {
             operation: Some(operation),
             ordered_by: col_name_strings,
             grouped_by: self.grouped_by.clone(),
-            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
@@ -271,7 +266,6 @@ impl DataFrame {
             operation: Some(operation),
             ordered_by: ordered.ordered_by.clone(),
             grouped_by: ordered.ordered_by.clone(),
-            ref_counts: Rc::clone(&ordered.ref_counts),
         })
     }
 
@@ -313,7 +307,6 @@ impl DataFrame {
             operation: Some(operation),
             ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),
-            ref_counts: Rc::clone(&self.ref_counts),
         })
     }
 
@@ -524,17 +517,5 @@ impl DataFrame {
                 (col_name.clone(), operation.hash_from_seed(idx, col_name))
             })
             .collect()
-    }
-}
-
-impl Drop for DataFrame {
-    fn drop(&mut self) {
-        let mut counts = self.ref_counts.borrow_mut();
-        for key in self.pool_indices.values() {
-            let count = counts.entry(*key).or_insert(0);
-            if *count != 0 {
-                *count -= 1;
-            }
-        }
     }
 }

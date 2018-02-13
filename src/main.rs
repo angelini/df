@@ -1,7 +1,10 @@
 #[macro_use]
 extern crate df;
+extern crate hyper;
 
 use std::path::Path;
+
+use hyper::server::Http;
 
 use df::aggregate::Aggregator;
 use df::dataframe::Schema;
@@ -43,6 +46,14 @@ fn run() -> Result<(), df::Error> {
     Ok(())
 }
 
+fn server() -> Result<(), df::Error> {
+    let addr = "127.0.0.1:3000".parse().unwrap();
+    let server = Http::new().bind(&addr, || Ok(df::api::Api)).unwrap();
+    server.run().unwrap();
+    Ok(())
+}
+
 fn main() {
-    run().expect("Error in run")
+    // run().expect("Error in run")
+    server().expect("Error in server")
 }
