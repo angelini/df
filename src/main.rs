@@ -30,13 +30,14 @@ fn run() -> Result<(), df::Error> {
             ("comment", Type::String),
         ],
     );
-    let line_items = df::from_csv(&mut pool, &Path::new("./data/line_items_full.csv"), &schema)?
-        .select(&["order_key"])?
+
+    let line_items = df::from_csv(&mut pool, &Path::new("./data/line_items.csv"), &schema)?;
+    let total_key = line_items.select(&["order_key"])?
         .aggregate(&agg!("order_key", Aggregator::Sum))?;
     df::timer::start(201, "collect");
     println!(
-        "line_items.collect(&mut pool): {:?}",
-        line_items.collect(&mut pool)
+        "total_key.collect(&mut pool): {:?}",
+        total_key.collect(&mut pool)
     );
     df::timer::stop(201);
     Ok(())

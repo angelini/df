@@ -1,5 +1,6 @@
 use std::fmt;
 use std::result;
+
 use decorum::R64;
 
 use value::{ListValues, Type, Value, Values};
@@ -23,8 +24,8 @@ type Result<T> = result::Result<T, Error>;
 
 macro_rules! simple_aggregate {
     ( $i:expr, $f:ident, $( $t:ident, $pt:ty ),* ) => {
-        match $i {
-            Values::List(list_values) => {
+        match *$i {
+            Values::List(ref list_values) => {
                 match *list_values {
                     $(
                         ListValues::$t(ref values) => {
@@ -37,7 +38,7 @@ macro_rules! simple_aggregate {
                 }
             }
             $(
-                Values::$t(values) => Values::from(Value::$t(Aggregator::$f(&values)?)),
+                Values::$t(ref values) => Values::from(Value::$t(Aggregator::$f(values)?)),
             )*
         }
     };
@@ -69,7 +70,7 @@ impl Aggregator {
         }
     }
 
-    pub fn aggregate(&self, input: Values) -> Result<Values> {
+    pub fn aggregate(&self, input: &Values) -> Result<Values> {
         Ok(match *self {
             Aggregator::First => {
                 simple_aggregate!(
@@ -86,9 +87,9 @@ impl Aggregator {
                 )
             }
             Aggregator::Sum => {
-                match input {
+                match *input {
                     Values::List(ref list_values) => {
-                        match **list_values {
+                        match *list_values {
                             ListValues::Int(ref values) => {
                                 Values::from(
                                     values
@@ -109,8 +110,8 @@ impl Aggregator {
                             _ => return Err(Error::SumOnInvalidType(input.type_())),
                         }
                     }
-                    Values::Int(values) => Values::from(Value::Int(values.iter().sum())),
-                    Values::Float(values) => Values::from(Value::Float(values.iter().fold(
+                    Values::Int(ref values) => Values::from(Value::Int(values.iter().sum())),
+                    Values::Float(ref values) => Values::from(Value::Float(values.iter().fold(
                         R64::from_inner(0.0),
                         |acc, &v| acc + v,
                     ))),

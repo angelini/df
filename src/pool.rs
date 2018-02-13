@@ -23,26 +23,26 @@ type Result<T> = result::Result<T, Error>;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
-    pub values: Values,
+    pub values: Rc<Values>,
     pub sorted: bool,
 }
 
 impl Entry {
-    fn new(values: Values, sorted: bool) -> Entry {
+    fn new(values: Rc<Values>, sorted: bool) -> Entry {
         Entry { values, sorted }
     }
 }
 
 macro_rules! get_value {
     ( $p:expr, $c:expr, $r:expr, $( $t:ident, $l:ident ),* ) => {
-        match $p.entries.get($c).map(|entry| &entry.values) {
+        match $p.entries.get($c).map(|entry| entry.values.as_ref()) {
             $(
                 Some(&Values::$t(ref values)) => {
                     Pool::get_clone(values.as_ref(), $r).map(Value::$t)
                 }
             )*
             Some(&Values::List(ref list_values)) => {
-                match *list_values.as_ref() {
+                match *list_values {
                     $(
                         ListValues::$t(ref values) => {
                             Pool::get_clone(values, $r).map(Value::$l)
@@ -83,7 +83,7 @@ impl Pool {
     }
 
     pub fn len(&self, idx: &u64) -> usize {
-        match self.entries.get(idx).map(|entry| &entry.values) {
+        match self.entries.get(idx).map(|entry| entry.values.as_ref()) {
             Some(&Values::Boolean(ref values)) => values.len(),
             Some(&Values::Int(ref values)) => values.len(),
             Some(&Values::Float(ref values)) => values.len(),
@@ -123,14 +123,14 @@ impl Pool {
         )
     }
 
-    pub fn set_values(&mut self, idx: u64, values: Values, sorted: bool) {
+    pub fn set_values(&mut self, idx: u64, values: Rc<Values>, sorted: bool) {
         self.entries.insert(idx, Entry::new(values, sorted));
         self.increment_count(idx);
     }
 
     pub fn set_initial_values(&mut self, values: Values) -> u64 {
         let idx = self.unused_idx();
-        self.entries.insert(idx, Entry::new(values, false));
+        self.entries.insert(idx, Entry::new(Rc::new(values), false));
         self.increment_count(idx);
         idx
     }

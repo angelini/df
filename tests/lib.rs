@@ -6,12 +6,12 @@ extern crate tempdir;
 #[macro_use]
 extern crate df;
 
-use decorum::R64;
-use tempdir::TempDir;
-
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+
+use decorum::R64;
+use tempdir::TempDir;
 
 use df::aggregate::Aggregator;
 use df::dataframe::{DataFrame, Result, Schema};

@@ -1,11 +1,10 @@
-use decorum::R64;
-
 use std::collections::HashMap;
 use std::fmt;
 use std::num;
-use std::rc::Rc;
 use std::result;
 use std::str;
+
+use decorum::R64;
 
 #[derive(Debug)]
 pub enum Error {
@@ -51,7 +50,7 @@ impl fmt::Display for Error {
 
 type Result<T> = result::Result<T, Error>;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum Type {
     Boolean,
     Int,
@@ -157,7 +156,7 @@ fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
         .collect()
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum ListValues {
     Boolean(Vec<Vec<bool>>),
     Int(Vec<Vec<i64>>),
@@ -255,13 +254,13 @@ macro_rules! keep {
     };
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Values {
-    Boolean(Rc<Vec<bool>>),
-    Int(Rc<Vec<i64>>),
-    Float(Rc<Vec<R64>>),
-    String(Rc<Vec<String>>),
-    List(Rc<ListValues>),
+    Boolean(Vec<bool>),
+    Int(Vec<i64>),
+    Float(Vec<R64>),
+    String(Vec<String>),
+    List(ListValues),
 }
 
 impl Values {
@@ -423,45 +422,45 @@ impl Values {
 
 impl From<Vec<bool>> for Values {
     fn from(values: Vec<bool>) -> Self {
-        Values::Boolean(Rc::new(values))
+        Values::Boolean(values)
     }
 }
 
 impl From<Vec<i64>> for Values {
     fn from(values: Vec<i64>) -> Self {
-        Values::Int(Rc::new(values))
+        Values::Int(values)
     }
 }
 
 impl From<Vec<R64>> for Values {
     fn from(values: Vec<R64>) -> Self {
-        Values::Float(Rc::new(values))
+        Values::Float(values)
     }
 }
 
 impl From<Vec<String>> for Values {
     fn from(values: Vec<String>) -> Self {
-        Values::String(Rc::new(values))
+        Values::String(values)
     }
 }
 
 impl From<ListValues> for Values {
     fn from(values: ListValues) -> Self {
-        Values::List(Rc::new(values))
+        Values::List(values)
     }
 }
 
 impl From<Value> for Values {
     fn from(value: Value) -> Self {
         match value {
-            Value::Boolean(value) => Values::Boolean(Rc::new(vec![value])),
-            Value::Int(value) => Values::Int(Rc::new(vec![value])),
-            Value::Float(value) => Values::Float(Rc::new(vec![value])),
-            Value::String(value) => Values::String(Rc::new(vec![value])),
-            Value::BooleanList(value) => Values::List(Rc::new(ListValues::Boolean(vec![value]))),
-            Value::IntList(value) => Values::List(Rc::new(ListValues::Int(vec![value]))),
-            Value::FloatList(value) => Values::List(Rc::new(ListValues::Float(vec![value]))),
-            Value::StringList(value) => Values::List(Rc::new(ListValues::String(vec![value]))),
+            Value::Boolean(value) => Values::Boolean(vec![value]),
+            Value::Int(value) => Values::Int(vec![value]),
+            Value::Float(value) => Values::Float(vec![value]),
+            Value::String(value) => Values::String(vec![value]),
+            Value::BooleanList(value) => Values::List(ListValues::Boolean(vec![value])),
+            Value::IntList(value) => Values::List(ListValues::Int(vec![value])),
+            Value::FloatList(value) => Values::List(ListValues::Float(vec![value])),
+            Value::StringList(value) => Values::List(ListValues::String(vec![value])),
         }
     }
 }

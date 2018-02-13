@@ -76,7 +76,7 @@ impl Row {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Column {
     pub name: String,
     pub type_: Type,
@@ -88,7 +88,7 @@ impl Column {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Schema {
     pub columns: Vec<Column>,
 }
@@ -360,6 +360,18 @@ impl DataFrame {
         }
     }
 
+    pub fn as_values(&self, pool: &mut Pool) -> Result<HashMap<String, Values>> {
+        if self.should_materialize(pool) {
+            self.materialize(pool)?;
+        }
+
+        let mut results = HashMap::new();
+        for (name, idx) in &self.pool_indices {
+            results.insert(name.clone(), pool.get_entry(idx)?.values.as_ref().clone());
+        }
+        Ok(results)
+    }
+
     pub fn print_indices(&self, name: &str) {
         println!("{} -> {:?}", name, self.pool_indices)
     }
@@ -398,7 +410,7 @@ impl DataFrame {
                 let (filter_pass_idxs, filtered_values) = predicate.filter(&filter_entry.values)?;
                 pool.set_values(
                     operation.hash_from_seed(&filter_col_idx, filter_col_name),
-                    filtered_values,
+                    Rc::new(filtered_values),
                     filter_entry.sorted,
                 );
 
@@ -407,7 +419,7 @@ impl DataFrame {
                         let new_idx = operation.hash_from_seed(idx, col_name);
                         let entry = pool.get_entry(idx)?;
                         let values = entry.values.select_by_idx(&filter_pass_idxs);
-                        pool.set_values(new_idx, values, entry.sorted)
+                        pool.set_values(new_idx, Rc::new(values), entry.sorted)
                     }
                 }
             }
@@ -419,7 +431,7 @@ impl DataFrame {
                     let (sort_indices, values) = entry.values.order_by(&sort_scores, false);
                     pool.set_values(
                         operation.hash_from_seed(&col_idx, col_name),
-                        values,
+                        Rc::new(values),
                         sort_scores.is_none(),
                     );
                     sort_scores = Some(sort_indices);
@@ -434,7 +446,7 @@ impl DataFrame {
                             let (_, values) = entry.values.order_by(&sort_scores, true);
                             pool.set_values(
                                 operation.hash_from_seed(&idx, col_name),
-                                values,
+                                Rc::new(values),
                                 false,
                             );
                         }
@@ -471,11 +483,11 @@ impl DataFrame {
                     if col_names.contains(col_name) {
                         pool.set_values(
                             idx,
-                            parent_entry.values.keep(&group_offsets),
+                            Rc::new(parent_entry.values.keep(&group_offsets)),
                             parent_entry.sorted,
                         );
                     } else {
-                        pool.set_values(idx, parent_entry.values.group_by(&group_offsets), false);
+                        pool.set_values(idx, Rc::new(parent_entry.values.group_by(&group_offsets)), false);
                     }
                 }
             }
@@ -485,7 +497,7 @@ impl DataFrame {
                     let entry = pool.get_entry(idx)?;
                     if aggregators.contains_key(col_name) {
                         let aggregator = &aggregators[col_name];
-                        pool.set_values(new_idx, aggregator.aggregate(entry.values)?, false)
+                        pool.set_values(new_idx, Rc::new(aggregator.aggregate(&entry.values)?), false)
                     } else {
                         pool.set_values(new_idx, entry.values, entry.sorted)
                     }
