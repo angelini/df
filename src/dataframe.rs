@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::result;
 
 use aggregate::{self, Aggregator};
-use pool::{self, Pool};
+use pool::{self, PoolRef};
 use value::{self, Predicate, Type, Value, Values};
 
 #[derive(Debug)]
@@ -158,6 +158,10 @@ impl Operation {
     }
 }
 
+fn as_strs(strings: &[String]) -> Vec<&str> {
+    strings.iter().map(|s| s.as_str()).collect()
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct DataFrame {
     pub schema: Schema,
@@ -169,10 +173,10 @@ pub struct DataFrame {
 }
 
 impl DataFrame {
-    pub fn new(pool: &mut Pool, schema: Schema, values: HashMap<String, Values>) -> DataFrame {
+    pub fn new(pool: &PoolRef, schema: Schema, values: HashMap<String, Values>) -> DataFrame {
         let mut pool_indices = BTreeMap::new();
         for (col_name, col_values) in values {
-            pool_indices.insert(col_name, pool.set_initial_values(col_values));
+            pool_indices.insert(col_name, pool.lock().unwrap().set_initial_values(col_values));
         }
         DataFrame {
             schema,
@@ -310,13 +314,24 @@ impl DataFrame {
         })
     }
 
-    pub fn collect(&self, pool: &mut Pool) -> Result<Vec<Row>> {
+    pub fn call(&self, operation: &Operation) -> Result<DataFrame> {
+        Ok(match *operation {
+            Operation::Select(ref column_names) => self.select(&as_strs(column_names))?,
+            Operation::Filter(ref column_name, ref predicate) => self.filter(column_name, predicate)?,
+            Operation::OrderBy(ref column_names) => self.order_by(&as_strs(column_names))?,
+            Operation::GroupBy(ref column_names) => self.group_by(&as_strs(column_names))?,
+            Operation::Aggregation(ref aggregators) => self.aggregate(aggregators)?,
+        })
+    }
+
+    pub fn collect(&self, pool: &PoolRef) -> Result<Vec<Row>> {
         if self.should_materialize(pool) {
             self.materialize(pool)?;
         }
 
         let mut row_idx = 0;
         let mut rows = vec![];
+        let pool = pool.lock().unwrap();
         let result_size = pool.len(
             self.pool_indices.values().nth(0).ok_or(Error::EmptyIndices)?,
         ) as u64;
@@ -353,14 +368,14 @@ impl DataFrame {
         }
     }
 
-    pub fn as_values(&self, pool: &mut Pool) -> Result<HashMap<String, Values>> {
+    pub fn as_values(&self, pool: &PoolRef) -> Result<HashMap<String, Values>> {
         if self.should_materialize(pool) {
             self.materialize(pool)?;
         }
 
         let mut results = HashMap::new();
         for (name, idx) in &self.pool_indices {
-            results.insert(name.clone(), pool.get_entry(idx)?.values.as_ref().clone());
+            results.insert(name.clone(), pool.lock().unwrap().get_entry(idx)?.values.as_ref().clone());
         }
         Ok(results)
     }
@@ -369,13 +384,13 @@ impl DataFrame {
         println!("{} -> {:?}", name, self.pool_indices)
     }
 
-    fn should_materialize(&self, pool: &Pool) -> bool {
+    fn should_materialize(&self, pool: &PoolRef) -> bool {
         self.pool_indices.values().any(|idx| {
-            !pool.is_column_materialized(idx)
+            !pool.lock().unwrap().is_column_materialized(idx)
         })
     }
 
-    fn materialize(&self, pool: &mut Pool) -> Result<()> {
+    fn materialize(&self, pool: &PoolRef) -> Result<()> {
         let parent = match self.parent {
             Some(ref parent) => parent,
             None => return Ok(()),
@@ -389,6 +404,7 @@ impl DataFrame {
             parent.materialize(pool)?
         }
 
+        let mut pool = pool.lock().unwrap();
         match *operation {
             Operation::Select(_) => {
                 for (col_name, idx) in &self.pool_indices {

@@ -1,7 +1,10 @@
-use rand::{self, Rng};
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+
+use rand::{self, Rng};
+
 use value::{ListValues, Value, Values};
 
 #[derive(Debug)]
@@ -58,7 +61,13 @@ pub struct Pool {
     entries: HashMap<u64, Entry>,
 }
 
+pub type PoolRef = Arc<Mutex<Pool>>;
+
 impl Pool {
+    pub fn new_ref() -> PoolRef {
+        Arc::new(Mutex::new(Pool::default()))
+    }
+
     pub fn size(&self) -> usize {
         self.entries.len()
     }

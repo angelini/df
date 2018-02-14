@@ -6,7 +6,7 @@ use std::path::Path;
 use csv;
 
 use dataframe::{self, DataFrame, Schema};
-use pool::Pool;
+use pool::PoolRef;
 use timer;
 use value::{self, Values};
 
@@ -44,7 +44,7 @@ impl From<value::Error> for Error {
 
 type Result<T> = ::std::result::Result<T, Error>;
 
-pub fn from_csv(pool: &mut Pool, path: &Path, schema: &Schema) -> Result<DataFrame> {
+pub fn from_csv(pool: &PoolRef, path: &Path, schema: &Schema) -> Result<DataFrame> {
     timer::start(101, "from_csv - read file");
     let file = File::open(path)?;
     let mut csv_reader = csv::ReaderBuilder::new()

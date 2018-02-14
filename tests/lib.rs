@@ -42,75 +42,73 @@ fn write_csv(dir: &TempDir, name: &str, rows: &[&str]) -> PathBuf {
 }
 
 #[test]
+#[allow(unused_attributes)]
+#[rustfmt_skip]
 fn test_no_transforms() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("bool", Type::Boolean, vec![true, false, true]),
-        ("int", Type::Int, vec![1, 2, 3])
-    );
-    assert_df_eq!(&mut pool, df, (true, 1), (false, 2), (true, 3));
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool,
+                        ("bool", Type::Boolean, vec![true, false, true]),
+                        ("int", Type::Int, vec![1, 2, 3]));
+    assert_df_eq!(&pool, df, (true, 1), (false, 2), (true, 3));
 }
 
 #[test]
+#[allow(unused_attributes)]
+#[rustfmt_skip]
 fn test_select() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("bool", Type::Boolean, vec![true, false, true]),
-        ("int", Type::Int, vec![1, 2, 3])
-    );
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool,
+                        ("bool", Type::Boolean, vec![true, false, true]),
+                        ("int", Type::Int, vec![1, 2, 3]));
     let output = df.select(&["int"]);
-    assert_df_eq!(&mut pool, check(output), (1), (2), (3));
+    assert_df_eq!(&pool, check(output), (1), (2), (3));
 }
 
 #[test]
 fn test_filter_eq() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("bool", Type::Boolean, vec![true, false, true]),
-        ("int", Type::Int, vec![1, 2, 3])
-    );
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool,
+                        ("bool", Type::Boolean, vec![true, false, true]),
+                        ("int", Type::Int, vec![1, 2, 3]));
     let output = df.filter("int", &predicate!(== 2));
-    assert_df_eq!(&mut pool, check(output), (false, 2));
+    assert_df_eq!(&pool, check(output), (false, 2));
 }
 
 #[test]
+#[allow(unused_attributes)]
+#[rustfmt_skip]
 fn test_filter_select() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("bool", Type::Boolean, vec![true, false, true]),
-        ("int", Type::Int, vec![1, 2, 3])
-    );
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool,
+                        ("bool", Type::Boolean, vec![true, false, true]),
+                        ("int", Type::Int, vec![1, 2, 3]));
     let output = || df.filter("int", &predicate!(== 2))?.select(&["bool"]);
-    assert_df_eq!(&mut pool, check(output()), (false));
+    assert_df_eq!(&pool, check(output()), (false));
 }
 
 #[test]
 #[allow(unused_attributes)]
 #[rustfmt_skip]
 fn test_order_by() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool,
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool,
                         ("1_int", Type::Int, vec![4, 1, 6]),
                         ("2_int", Type::Int, vec![1, 2, 3]));
     let output = df.order_by(&["1_int"]);
-    assert_df_eq!(&mut pool, check(output), (1, 2), (4, 1), (6, 3));
+    assert_df_eq!(&pool, check(output), (1, 2), (4, 1), (6, 3));
 }
 
 #[test]
 fn test_order_by_multiple_columns() {
-    let mut pool = Pool::default();
+    let mut pool = Pool::new_ref();
     let df =
-        from_vecs!(&mut pool,
+        from_vecs!(&pool,
                    ("1_int", Type::Int, vec![4, 1, 6, 4, 1]),
                    ("2_int", Type::Int, vec![3, 1, 1, 1, 2]),
                    ("3_int", Type::Int, vec![1, 2, 3, 4, 5]));
     let output = df.order_by(&["1_int", "2_int"]);
     assert_df_eq!(
-        &mut pool,
+        &pool,
         check(output),
         (1, 1, 2),
         (1, 2, 5),
@@ -122,23 +120,23 @@ fn test_order_by_multiple_columns() {
 
 #[test]
 fn test_group_by_only_keys() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool, ("int", Type::Int, vec![2, 1, 2, 3]));
     let output = df.group_by(&["int"]);
-    assert_df_eq!(&mut pool, check(output), (1), (2), (3));
+    assert_df_eq!(&pool, check(output), (1), (2), (3));
 }
 
 #[test]
 #[allow(unused_attributes)]
 #[rustfmt_skip]
 fn test_group_by() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool,
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool,
                         ("int", Type::Int, vec![3, 2, 1, 2]),
                         ("bool", Type::Boolean, vec![true, false, true, true]));
     let output = df.group_by(&["int"]);
     assert_df_eq!(
-        &mut pool,
+        &pool,
         check(output),
         (1, vec![true]),
         (2, vec![false, true]),
@@ -148,15 +146,15 @@ fn test_group_by() {
 
 #[test]
 fn test_group_by_multiple_columns() {
-    let mut pool = Pool::default();
+    let mut pool = Pool::new_ref();
     let df =
-        from_vecs!(&mut pool,
-                        ("1_int", Type::Int, vec![3, 2, 1, 2, 2]),
-                        ("2_int", Type::Int, vec![4, 3, 2, 1, 3]),
-                        ("bool", Type::Boolean, vec![true, false, true, false, true]));
+        from_vecs!(&pool,
+                   ("1_int", Type::Int, vec![3, 2, 1, 2, 2]),
+                   ("2_int", Type::Int, vec![4, 3, 2, 1, 3]),
+                   ("bool", Type::Boolean, vec![true, false, true, false, true]));
     let output = df.group_by(&["1_int", "2_int"]);
     assert_df_eq!(
-        &mut pool,
+        &pool,
         check(output),
         (1, 2, vec![true]),
         (2, 1, vec![false]),
@@ -166,58 +164,58 @@ fn test_group_by_multiple_columns() {
 }
 
 #[test]
+#[allow(unused_attributes)]
+#[rustfmt_skip]
 fn test_group_agg() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(
-        &mut pool,
-        ("bool", Type::Boolean, vec![true, false, true]),
-        ("int", Type::Int, vec![1, 2, 3])
-    );
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool,
+                        ("bool", Type::Boolean, vec![true, false, true]),
+                        ("int", Type::Int, vec![1, 2, 3]));
     let output = || {
         df.group_by(&["bool"])?.aggregate(
             &agg!("int", Aggregator::Sum),
         )
     };
-    assert_df_eq!(&mut pool, check(output()), (false, 2), (true, 4));
+    assert_df_eq!(&pool, check(output()), (false, 2), (true, 4));
 }
 
 #[test]
 fn test_agg_sum() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![1, 2, 3]));
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool, ("int", Type::Int, vec![1, 2, 3]));
     let output = df.aggregate(&agg!("int", Aggregator::Sum));
-    assert_df_eq!(&mut pool, check(output), (6));
+    assert_df_eq!(&pool, check(output), (6));
 }
 
 #[test]
 fn test_agg_first() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![1, 2, 3]));
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool, ("int", Type::Int, vec![1, 2, 3]));
     let output = df.aggregate(&agg!("int", Aggregator::First));
-    assert_df_eq!(&mut pool, check(output), (1));
+    assert_df_eq!(&pool, check(output), (1));
 }
 
 #[test]
 fn test_agg_max() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![1, 2, 3, 2]));
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool, ("int", Type::Int, vec![1, 2, 3, 2]));
     let output = df.aggregate(&agg!("int", Aggregator::Max));
-    assert_df_eq!(&mut pool, check(output), (3));
+    assert_df_eq!(&pool, check(output), (3));
 }
 
 #[test]
 fn test_agg_min() {
-    let mut pool = Pool::default();
-    let df = from_vecs!(&mut pool, ("int", Type::Int, vec![2, 1, 2, 3]));
+    let mut pool = Pool::new_ref();
+    let df = from_vecs!(&pool, ("int", Type::Int, vec![2, 1, 2, 3]));
     let output = df.aggregate(&agg!("int", Aggregator::Min));
-    assert_df_eq!(&mut pool, check(output), (1));
+    assert_df_eq!(&pool, check(output), (1));
 }
 
 #[test]
 fn test_agg_multiple_columns() {
-    let mut pool = Pool::default();
+    let mut pool = Pool::new_ref();
     let df =
-        from_vecs!(&mut pool,
+        from_vecs!(&pool,
                    ("1_int", Type::Int, vec![4, 1, 6, 4, 1]),
                    ("2_int", Type::Int, vec![3, 1, 1, 1, 2]),
                    ("3_int", Type::Int, vec![1, 2, 3, 4, 5]));
@@ -229,7 +227,7 @@ fn test_agg_multiple_columns() {
         "3_int",
         Aggregator::Max
     ));
-    assert_df_eq!(&mut pool, check(output), (16, 1, 5));
+    assert_df_eq!(&pool, check(output), (16, 1, 5));
 }
 
 #[test]
@@ -240,7 +238,7 @@ fn test_from_csv() {
         "example.csv",
         &["true|1|1.0|hello world", "false|4|1.2|fOObAr"],
     );
-    let mut pool = Pool::default();
+    let pool = Pool::new_ref();
     let schema = Schema::new(
         &[
             ("bool", Type::Boolean),
@@ -249,8 +247,8 @@ fn test_from_csv() {
             ("string", Type::String),
         ],
     );
-    let df = df::from_csv(&mut pool, path.as_path(), &schema);
-    assert_df_eq!(&mut pool, df.expect("Cannot build df from csv"),
+    let df = df::from_csv(&pool, path.as_path(), &schema);
+    assert_df_eq!(&pool, df.expect("Cannot build df from csv"),
                   (true, 1, R64::from_inner(1.0), "hello world".to_string()),
                   (false, 4, R64::from_inner(1.2), "fOObAr".to_string()));
 }

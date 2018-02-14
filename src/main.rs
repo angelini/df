@@ -12,7 +12,7 @@ use df::pool::Pool;
 use df::value::Type;
 
 fn run() -> Result<(), df::Error> {
-    let mut pool = Pool::default();
+    let pool = Pool::new_ref();
     let schema = Schema::new(
         &[
             ("order_key", Type::Int),
@@ -34,13 +34,13 @@ fn run() -> Result<(), df::Error> {
         ],
     );
 
-    let line_items = df::from_csv(&mut pool, &Path::new("./data/line_items.csv"), &schema)?;
+    let line_items = df::from_csv(&pool, &Path::new("./data/line_items.csv"), &schema)?;
     let total_key = line_items.select(&["order_key"])?
         .aggregate(&agg!("order_key", Aggregator::Sum))?;
     df::timer::start(201, "collect");
     println!(
         "total_key.collect(&mut pool): {:?}",
-        total_key.collect(&mut pool)
+        total_key.collect(&pool)
     );
     df::timer::stop(201);
     Ok(())
@@ -48,7 +48,7 @@ fn run() -> Result<(), df::Error> {
 
 fn server() -> Result<(), df::Error> {
     let addr = "127.0.0.1:3000".parse().unwrap();
-    let server = Http::new().bind(&addr, || Ok(df::api::Api)).unwrap();
+    let server = Http::new().bind(&addr, || Ok(df::api::Api::default())).unwrap();
     server.run().unwrap();
     Ok(())
 }

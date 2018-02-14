@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use futures::Stream;
 use futures::future::{self, Future};
@@ -7,8 +9,9 @@ use hyper::header::ContentLength;
 use hyper::server::{Request, Response, Service};
 use serde_json;
 
-use dataframe::{self, DataFrame, Operation};
-use serialize::from_csv;
+use dataframe::{self, DataFrame, Operation, Schema};
+use pool::{Pool, PoolRef};
+use serialize::{self, from_csv};
 use value::Values;
 
 #[derive(Debug)]
@@ -16,6 +19,7 @@ enum Error {
     DataFrame(dataframe::Error),
     MalformedJSON,
     MissingDataFrame,
+    Serialize(serialize::Error),
 }
 
 impl Error {
@@ -30,12 +34,26 @@ impl From<dataframe::Error> for Error {
     }
 }
 
+impl From<serialize::Error> for Error {
+    fn from(error: serialize::Error) -> Error {
+        Error::Serialize(error)
+    }
+}
+
 type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Deserialize, Serialize)]
+enum Action {
+    Collect,
+    Count,
+    Take(u64),
+}
+
+#[derive(Deserialize, Serialize)]
 enum RequestFunction {
+    Action(Action),
     Op(Operation),
-    Read(String, String),
+    Read(String, String, Schema),
 }
 
 #[derive(Deserialize, Serialize)]
@@ -59,45 +77,42 @@ impl ResponseBody {
     }
 }
 
-fn as_strs(strings: &[String]) -> Vec<&str> {
-    strings.iter().map(|s| s.as_str()).collect()
-}
-
-fn execute_op(df: &DataFrame, operation: &Operation) -> Result<ResponseBody> {
-    Ok(match *operation {
-        Operation::Select(ref column_names) => {
-            ResponseBody::from_dataframe(df.select(&as_strs(column_names))?)
+fn execute_action(pool: &PoolRef, df: &DataFrame, action: &Action) -> Result<ResponseBody> {
+    let values = match *action {
+        Action::Collect => {
+            df.as_values(pool)?
         }
-        Operation::Filter(ref column_name, ref predicate) => {
-            ResponseBody::from_dataframe(df.filter(column_name, predicate)?)
-        }
-        Operation::OrderBy(ref column_names) => {
-            ResponseBody::from_dataframe(df.order_by(&as_strs(column_names))?)
-        }
-        Operation::GroupBy(ref column_names) => {
-            ResponseBody::from_dataframe(df.group_by(&as_strs(column_names))?)
-        }
-        Operation::Aggregation(ref aggregators) => {
-            ResponseBody::from_dataframe(df.aggregate(aggregators)?)
-        }
+        _ => unimplemented!()
+    };
+    Ok(ResponseBody {
+        dataframe: df.clone(),
+        values
     })
 }
 
-fn read_df(scheme: &str, path: &str) -> Result<ResponseBody> {
-    // match (schema, path) {
-    //     ("csv", path) => from_csv
-    // }
-    // TODO: Thread pool into this function
-    unimplemented!()
+fn execute_op(df: &DataFrame, operation: &Operation) -> Result<ResponseBody> {
+    Ok(ResponseBody::from_dataframe(df.call(operation)?))
 }
 
-fn handle_request(req_body: RequestBody) -> Result<ResponseBody> {
+fn read_df(pool: &PoolRef, format: &str, path: &str, schema: &Schema) -> Result<ResponseBody> {
+    let df = match (format, path) {
+        ("csv", path) => from_csv(pool, Path::new(path), schema),
+        _ => unimplemented!()
+    };
+    Ok(ResponseBody::from_dataframe(df?))
+}
+
+fn handle_request(pool: &PoolRef, req_body: RequestBody) -> Result<ResponseBody> {
     match req_body.function {
+        RequestFunction::Action(action) => {
+            let df = req_body.dataframe.ok_or(Error::MissingDataFrame)?;
+            execute_action(pool, &df, &action)
+        }
         RequestFunction::Op(operation) => {
             let df = req_body.dataframe.ok_or(Error::MissingDataFrame)?;
             execute_op(&df, &operation)
         }
-        RequestFunction::Read(scheme, path) => read_df(&scheme, &path),
+        RequestFunction::Read(scheme, path, schema) => read_df(pool, &scheme, &path, &schema),
     }
 }
 
@@ -120,7 +135,15 @@ fn serialize_response(response: Result<ResponseBody>) -> Response {
     }
 }
 
-pub struct Api;
+pub struct Api {
+    pool: PoolRef,
+}
+
+impl Default for Api {
+    fn default() -> Self {
+        Api { pool: Arc::new(Mutex::new(Pool::default())) }
+    }
+}
 
 impl Service for Api {
     type Request = Request;
@@ -131,21 +154,21 @@ impl Service for Api {
 
     fn call(&self, req: Request) -> Self::Future {
         let mut response = Response::new();
-
         match (req.method(), req.path()) {
             (&Method::Post, "/call") => {
-                return Box::new(req.body().concat2().map(|b| {
+                let pool = self.pool.clone();
+                let res_future = req.body().concat2().map(move |b| {
                     match serde_json::from_slice::<RequestBody>(b.as_ref()) {
-                        Ok(req_body) => serialize_response(handle_request(req_body)),
+                        Ok(req_body) => serialize_response(handle_request(&pool, req_body)),
                         Err(_) => serialize_response(Err(Error::MalformedJSON)),
                     }
-                }));
+                });
+                return Box::new(res_future);
             }
             _ => {
                 response.set_status(StatusCode::NotFound);
             }
         };
-
         Box::new(future::ok(response))
     }
 }
