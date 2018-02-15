@@ -162,7 +162,7 @@ fn as_strs(strings: &[String]) -> Vec<&str> {
     strings.iter().map(|s| s.as_str()).collect()
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DataFrame {
     pub schema: Schema,
     parent: Option<Box<DataFrame>>,
@@ -369,6 +369,7 @@ impl DataFrame {
     }
 
     pub fn as_values(&self, pool: &PoolRef) -> Result<HashMap<String, Values>> {
+        println!("pool: {:?}", pool);
         if self.should_materialize(pool) {
             self.materialize(pool)?;
         }

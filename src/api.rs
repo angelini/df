@@ -42,27 +42,27 @@ impl From<serialize::Error> for Error {
 
 type Result<T> = ::std::result::Result<T, Error>;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 enum Action {
     Collect,
     Count,
     Take(u64),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 enum RequestFunction {
     Action(Action),
     Op(Operation),
     Read(String, String, Schema),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct RequestBody {
     dataframe: Option<DataFrame>,
     function: RequestFunction,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct ResponseBody {
     dataframe: DataFrame,
     values: HashMap<String, Values>,
@@ -79,14 +79,12 @@ impl ResponseBody {
 
 fn execute_action(pool: &PoolRef, df: &DataFrame, action: &Action) -> Result<ResponseBody> {
     let values = match *action {
-        Action::Collect => {
-            df.as_values(pool)?
-        }
-        _ => unimplemented!()
+        Action::Collect => df.as_values(pool)?,
+        _ => unimplemented!(),
     };
     Ok(ResponseBody {
         dataframe: df.clone(),
-        values
+        values,
     })
 }
 
@@ -97,12 +95,13 @@ fn execute_op(df: &DataFrame, operation: &Operation) -> Result<ResponseBody> {
 fn read_df(pool: &PoolRef, format: &str, path: &str, schema: &Schema) -> Result<ResponseBody> {
     let df = match (format, path) {
         ("csv", path) => from_csv(pool, Path::new(path), schema),
-        _ => unimplemented!()
+        _ => unimplemented!(),
     };
     Ok(ResponseBody::from_dataframe(df?))
 }
 
 fn handle_request(pool: &PoolRef, req_body: RequestBody) -> Result<ResponseBody> {
+    println!("req_body: {:?}", req_body);
     match req_body.function {
         RequestFunction::Action(action) => {
             let df = req_body.dataframe.ok_or(Error::MissingDataFrame)?;
