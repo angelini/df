@@ -369,7 +369,6 @@ impl DataFrame {
     }
 
     pub fn as_values(&self, pool: &PoolRef) -> Result<HashMap<String, Values>> {
-        println!("pool: {:?}", pool);
         if self.should_materialize(pool) {
             self.materialize(pool)?;
         }

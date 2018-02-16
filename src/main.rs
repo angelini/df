@@ -2,7 +2,9 @@
 extern crate df;
 extern crate hyper;
 
+use std::env;
 use std::path::Path;
+use std::sync::Arc;
 
 use hyper::server::Http;
 
@@ -11,7 +13,7 @@ use df::dataframe::Schema;
 use df::pool::Pool;
 use df::value::Type;
 
-fn run() -> Result<(), df::Error> {
+fn example() -> Result<(), df::Error> {
     let pool = Pool::new_ref();
     let schema = Schema::new(
         &[
@@ -35,8 +37,10 @@ fn run() -> Result<(), df::Error> {
     );
 
     let line_items = df::from_csv(&pool, &Path::new("./data/line_items.csv"), &schema)?;
-    let total_key = line_items.select(&["order_key"])?
-        .aggregate(&agg!("order_key", Aggregator::Sum))?;
+    let total_key = line_items.select(&["order_key"])?.aggregate(&agg!(
+        "order_key",
+        Aggregator::Sum
+    ))?;
     df::timer::start(201, "collect");
     println!(
         "total_key.collect(&mut pool): {:?}",
@@ -48,12 +52,20 @@ fn run() -> Result<(), df::Error> {
 
 fn server() -> Result<(), df::Error> {
     let addr = "127.0.0.1:3000".parse().unwrap();
-    let server = Http::new().bind(&addr, || Ok(df::api::Api::default())).unwrap();
+    let pool = Pool::new_ref();
+    let server = Http::new()
+        .bind(&addr, move || Ok(df::api::Api::new(Arc::clone(&pool))))
+        .unwrap();
     server.run().unwrap();
     Ok(())
 }
 
 fn main() {
-    // run().expect("Error in run")
-    server().expect("Error in server")
+    if let Some(command) = env::args().nth(1) {
+        match command.as_str() {
+            "example" => example().expect("Error in example"),
+            "server" => server().expect("Error in server"),
+            _ => panic!("Unknown command")
+        }
+    }
 }

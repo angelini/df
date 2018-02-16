@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use futures::Stream;
 use futures::future::{self, Future};
@@ -10,8 +10,9 @@ use hyper::server::{Request, Response, Service};
 use serde_json;
 
 use dataframe::{self, DataFrame, Operation, Schema};
-use pool::{Pool, PoolRef};
+use pool::PoolRef;
 use serialize::{self, from_csv};
+use timer;
 use value::Values;
 
 #[derive(Debug)]
@@ -78,10 +79,12 @@ impl ResponseBody {
 }
 
 fn execute_action(pool: &PoolRef, df: &DataFrame, action: &Action) -> Result<ResponseBody> {
+    timer::start(301, &format!("execute action - {:?}", action));
     let values = match *action {
         Action::Collect => df.as_values(pool)?,
         _ => unimplemented!(),
     };
+    timer::stop(301);
     Ok(ResponseBody {
         dataframe: df.clone(),
         values,
@@ -101,7 +104,6 @@ fn read_df(pool: &PoolRef, format: &str, path: &str, schema: &Schema) -> Result<
 }
 
 fn handle_request(pool: &PoolRef, req_body: RequestBody) -> Result<ResponseBody> {
-    println!("req_body: {:?}", req_body);
     match req_body.function {
         RequestFunction::Action(action) => {
             let df = req_body.dataframe.ok_or(Error::MissingDataFrame)?;
@@ -138,9 +140,9 @@ pub struct Api {
     pool: PoolRef,
 }
 
-impl Default for Api {
-    fn default() -> Self {
-        Api { pool: Arc::new(Mutex::new(Pool::default())) }
+impl Api {
+    pub fn new(pool: PoolRef) -> Self {
+        Api { pool }
     }
 }
 
@@ -155,7 +157,7 @@ impl Service for Api {
         let mut response = Response::new();
         match (req.method(), req.path()) {
             (&Method::Post, "/call") => {
-                let pool = self.pool.clone();
+                let pool = Arc::clone(&self.pool);
                 let res_future = req.body().concat2().map(move |b| {
                     match serde_json::from_slice::<RequestBody>(b.as_ref()) {
                         Ok(req_body) => serialize_response(handle_request(&pool, req_body)),
