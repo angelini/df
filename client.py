@@ -1,65 +1,73 @@
-from enum import Enum
+import enum
 import requests
 
 URI = 'http://127.0.0.1:3000/call'
 
 
-class Type(Enum):
+class Type(enum.Enum):
     BOOLEAN = 1
     INT = 2
     FLOAT = 3
     STRING = 4
 
-
-def type_(t):
-    to_s = {
-        Type.BOOLEAN: 'Boolean',
-        Type.INT: 'Int',
-        Type.FLOAT: 'Float',
-        Type.STRING: 'String'
-    }
-    return to_s[t]
-
-
-def collect():
-    return {'Action': 'Collect'}
+    def serialize(self):
+        to_s = {
+            Type.BOOLEAN: 'Boolean',
+            Type.INT: 'Int',
+            Type.FLOAT: 'Float',
+            Type.STRING: 'String'
+        }
+        return to_s[self]
 
 
-def count():
-    return {'Action': 'Count'}
+
+class Schema:
+
+    def __init__(self, columns):
+        self.columns = columns
+
+    def serialize(self):
+        return {'columns': [{'name': col[0], 'type_': col[1].serialize()}
+                            for col in self.columns]}
 
 
-def take(n):
-    return {'Action': {'Take': n}}
 
+class Df:
 
-def from_csv(path, schema):
-    return {'Read': ['csv', path, schema]}
+    def __init__(self, dataframe, values):
+        self.dataframe = dataframe
+        self.values = values
 
+    @staticmethod
+    def call(dataframe, function):
+        res = requests.post(URI, json={'dataframe': dataframe,
+                                       'function': function})
+        if not res.ok:
+            raise ValueError(res.content)
+        json = res.json()
+        return Df(json['dataframe'], json['values'])
 
-def schema(columns):
-    return {'columns': [{'name': col[0], 'type_': col[1]}
-                        for col in columns]}
+    @staticmethod
+    def from_csv(path, schema):
+        return Df.call(None, {'Read': ['csv', path, schema.serialize()]})
 
+    def select(self, column_names):
+        return Df.call(self.dataframe, {'Op': {'Select': column_names}})
 
-def select(column_names):
-    return {'Op': {'Select': column_names}}
+    def collect(self):
+        return Df.call(self.dataframe, {'Action': 'Collect'}).values
 
+    def count(self):
+        return Df.call(self.dataframe, {'Action': 'Count'}).values
 
-def call(dataframe, function):
-    print('df: {}'.format(dataframe))
-    print('fn: {}'.format(function))
-    res = requests.post(URI, json={'dataframe': dataframe,
-                                   'function': function})
-    if res.ok:
-        return res.json()
-    return res.content
+    def take(self, n):
+        return Df.call(self.dataframe, {'Action': {'Take': n}}).values
 
 
 def example():
-    res = call(None, from_csv('data/small.csv',
-                              schema([('int', type_(Type.INT)),
-                                      ('string', type_(Type.STRING)),
-                                      ('boolean', type_(Type.BOOLEAN))])))
-    selected = call(res['dataframe'], select(['int']))
-    return call(selected['dataframe'], collect())
+    schema = Schema([('int', Type.INT),
+                     ('string', Type.STRING),
+                     ('boolean', Type.BOOLEAN)])
+    return Df.from_csv('data/small.csv', schema) \
+             .select(['int']) \
+             .collect()
