@@ -76,13 +76,17 @@ class Predicate:
 
 
 class Aggregator(enum.Enum):
-    FIRST = 1
-    SUM = 2
-    MAX = 3
-    MIN = 4
+    AVERAGE = 1
+    COUNT = 2
+    FIRST = 3
+    SUM = 4
+    MAX = 5
+    MIN = 6
 
     def serialize(self):
         to_s = {
+            Aggregator.AVERAGE: 'Average',
+            Aggregator.COUNT: 'Count',
             Aggregator.FIRST: 'First',
             Aggregator.SUM: 'Sum',
             Aggregator.MAX: 'Max',
@@ -139,7 +143,7 @@ class Df:
         return Df.call(self.dataframe, {'Action': {'Take': n}}).values
 
 
-def example():
+def example_small():
     schema = Schema([('int', Type.INT),
                      ('string', Type.STRING),
                      ('boolean', Type.BOOLEAN)])
@@ -147,4 +151,62 @@ def example():
              .filter('boolean', Predicate(Comparator.EQUAL, Value(True))) \
              .select(['int']) \
              .aggregate({'int': Aggregator.SUM}) \
+             .collect()
+
+
+def example_line_items(full=False):
+    """
+    -- $ID$
+    -- TPC-H/TPC-R Pricing Summary Report Query (Q1)
+    -- Functional Query Definition
+    -- Approved February 1998
+    :x
+    :o
+    select
+        l_returnflag,
+        l_linestatus,
+        sum(l_quantity) as sum_qty,
+        sum(l_extendedprice) as sum_base_price,
+        sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+        sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+        avg(l_quantity) as avg_qty,
+        avg(l_extendedprice) as avg_price,
+        avg(l_discount) as avg_disc,
+        count(*) as count_order
+    from
+        lineitem
+    where
+        l_shipdate <= date '1998-12-01' - interval ':1' day (3)
+    group by
+        l_returnflag,
+        l_linestatus
+    order by
+        l_returnflag,
+        l_linestatus;
+    :n -1
+    """
+    schema = Schema([('order_key', Type.INT),
+                     ('part_key', Type.INT),
+                     ('supplier_key', Type.INT),
+                     ('line_number', Type.INT),
+                     ('quantity', Type.FLOAT),
+                     ('extended_price', Type.FLOAT),
+                     ('discount', Type.FLOAT),
+                     ('tax', Type.FLOAT),
+                     ('return_flag', Type.STRING),
+                     ('line_status', Type.STRING),
+                     ('ship_date', Type.STRING),
+                     ('commit_date', Type.STRING),
+                     ('receipt_date', Type.STRING),
+                     ('ship_instructions', Type.STRING),
+                     ('ship_mode', Type.STRING),
+                     ('comment', Type.STRING)])
+    path = 'data/line_items{}.csv'.format('_full' if full else '')
+    return Df.from_csv(path, schema) \
+             .filter('ship_date', Predicate(Comparator.LESS_THAN_OR_EQ, Value('1998-12-01'))) \
+             .group_by(['return_flag', 'line_status']) \
+             .order_by(['return_flag', 'line_status']) \
+             .select(['return_flag', 'line_status', 'quantity', 'extended_price']) \
+             .aggregate({'quantity': Aggregator.SUM,
+                         'extended_price': Aggregator.SUM}) \
              .collect()

@@ -198,7 +198,7 @@ impl DataFrame {
         Ok(DataFrame {
             pool_indices,
             schema: self.schema.select(column_names),
-            parent: Some(Box::new(self.clone())),
+            parent: Some(box self.clone()),
             operation: Some(operation),
             ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),
@@ -210,7 +210,7 @@ impl DataFrame {
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: self.schema.clone(),
-            parent: Some(Box::new(self.clone())),
+            parent: Some(box self.clone()),
             operation: Some(operation),
             ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),
@@ -229,7 +229,7 @@ impl DataFrame {
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: self.schema.clone(),
-            parent: Some(Box::new(self.clone())),
+            parent: Some(box self.clone()),
             operation: Some(operation),
             ordered_by: col_name_strings,
             grouped_by: self.grouped_by.clone(),
@@ -259,14 +259,14 @@ impl DataFrame {
             } else {
                 Column::new(
                     column.name.clone(),
-                    Type::List(Box::new(column.type_.clone())),
+                    Type::List(box column.type_.clone()),
                 )
             })
             .collect::<Vec<Column>>();
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &ordered.pool_indices),
             schema: Schema { columns },
-            parent: Some(Box::new(ordered.clone())),
+            parent: Some(box ordered.clone()),
             operation: Some(operation),
             ordered_by: ordered.ordered_by.clone(),
             grouped_by: ordered.ordered_by.clone(),
@@ -307,7 +307,7 @@ impl DataFrame {
         Ok(DataFrame {
             pool_indices: Self::new_indices(&operation, &self.pool_indices),
             schema: Schema { columns },
-            parent: Some(Box::new(self.clone())),
+            parent: Some(box self.clone()),
             operation: Some(operation),
             ordered_by: self.ordered_by.clone(),
             grouped_by: self.grouped_by.clone(),

@@ -30,8 +30,8 @@ fn example() -> Result<(), df::Error> {
             ("ship_date", Type::String),
             ("commit_date", Type::String),
             ("receipt_date", Type::String),
-            ("shipping_instructions", Type::String),
-            ("shipping_mode", Type::String),
+            ("ship_instructions", Type::String),
+            ("ship_mode", Type::String),
             ("comment", Type::String),
         ],
     );

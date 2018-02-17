@@ -164,12 +164,12 @@ impl Service for Api {
                         Err(_) => serialize_response(Err(Error::MalformedJSON)),
                     }
                 });
-                return Box::new(res_future);
+                return box res_future;
             }
             _ => {
                 response.set_status(StatusCode::NotFound);
             }
         };
-        Box::new(future::ok(response))
+        box future::ok(response)
     }
 }

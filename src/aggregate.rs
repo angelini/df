@@ -6,6 +6,7 @@ use value::{ListValues, Type, Value, Values};
 
 #[derive(Debug)]
 pub enum Error {
+    AverageOnInvalidType(Type),
     EmptyColumn,
     SumOnInvalidType(Type),
 }
@@ -13,6 +14,9 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            Error::AverageOnInvalidType(ref type_) => {
+                write!(f, "Aggregate aggregate on {:?} column", type_)
+            }
             Error::EmptyColumn => write!(f, "Aggregate on empty column"),
             Error::SumOnInvalidType(ref type_) => write!(f, "Sum aggregate on {:?} column", type_),
         }
@@ -37,17 +41,20 @@ macro_rules! simple_aggregate {
                 }
             }
             $(
-                Values::$t(ref values) => Values::from(Value::$t(Aggregator::$f(values)?)),
+                Values::$t(ref values) => Values::from(Value::from(Aggregator::$f(values)?)),
             )*
         }
     };
 }
+
 #[derive(Clone, Debug, Deserialize, Hash, Serialize)]
 pub enum Aggregator {
+    Average,
+    Count,
     First,
-    Sum,
     Max,
     Min,
+    Sum,
 }
 
 impl Aggregator {
@@ -56,6 +63,14 @@ impl Aggregator {
             Type::List(box ref inner) => self.output_type(inner),
             _ => {
                 match *self {
+                    Aggregator::Average => {
+                        if [Type::Int, Type::Float].contains(input_type) {
+                            Ok(Type::Float)
+                        } else {
+                            Err(Error::SumOnInvalidType(input_type.clone()))
+                        }
+                    }
+                    Aggregator::Count => Ok(Type::Int),
                     Aggregator::Sum => {
                         if [Type::Int, Type::Float].contains(input_type) {
                             Ok(input_type.clone())
@@ -71,10 +86,98 @@ impl Aggregator {
 
     pub fn aggregate(&self, input: &Values) -> Result<Values> {
         Ok(match *self {
+            Aggregator::Average => {
+                match *input {
+                    Values::List(ref list_values) => {
+                        match *list_values {
+                            ListValues::Int(ref values) => {
+                                Values::from(
+                                    values
+                                        .iter()
+                                        .map(|vs| {
+                                            R64::from_inner(
+                                                vs.iter().sum::<i64>() as f64 / vs.len() as f64,
+                                            )
+                                        })
+                                        .collect::<Vec<R64>>(),
+                                )
+                            }
+                            ListValues::Float(ref values) => {
+                                Values::from(
+                                    values
+                                        .iter()
+                                        .map(|vs| {
+                                            vs.iter().fold(
+                                                R64::from_inner(0.0),
+                                                |acc, &v| acc + v,
+                                            ) /
+                                                vs.len() as f64
+                                        })
+                                        .collect::<Vec<R64>>(),
+                                )
+                            }
+                            _ => return Err(Error::AverageOnInvalidType(input.type_())),
+                        }
+                    }
+                    Values::Int(ref values) => Values::from(Value::Float(R64::from_inner(
+                        values.iter().sum::<i64>() as f64 /
+                            values.len() as f64,
+                    ))),
+                    Values::Float(ref values) => Values::from(Value::Float(
+                        values.iter().fold(
+                            R64::from_inner(0.0),
+                            |acc, &v| acc + v,
+                        ) / values.len() as f64,
+                    )),
+                    _ => return Err(Error::AverageOnInvalidType(input.type_())),
+                }
+            }
+            Aggregator::Count => {
+                simple_aggregate!(
+                    input,
+                    count,
+                    Boolean,
+                    i64,
+                    Int,
+                    i64,
+                    Float,
+                    i64,
+                    String,
+                    i64
+                )
+            }
             Aggregator::First => {
                 simple_aggregate!(
                     input,
                     first,
+                    Boolean,
+                    bool,
+                    Int,
+                    i64,
+                    Float,
+                    R64,
+                    String,
+                    String
+                )
+            }
+            Aggregator::Max => {
+                simple_aggregate!(
+                    input,
+                    max,
+                    Boolean,
+                    bool,
+                    Int,
+                    i64,
+                    Float,
+                    R64,
+                    String,
+                    String
+                )
+            }
+            Aggregator::Min => {
+                simple_aggregate!(
+                    input,
+                    min,
                     Boolean,
                     bool,
                     Int,
@@ -117,35 +220,11 @@ impl Aggregator {
                     _ => return Err(Error::SumOnInvalidType(input.type_())),
                 }
             }
-            Aggregator::Max => {
-                simple_aggregate!(
-                    input,
-                    max,
-                    Boolean,
-                    bool,
-                    Int,
-                    i64,
-                    Float,
-                    R64,
-                    String,
-                    String
-                )
-            }
-            Aggregator::Min => {
-                simple_aggregate!(
-                    input,
-                    min,
-                    Boolean,
-                    bool,
-                    Int,
-                    i64,
-                    Float,
-                    R64,
-                    String,
-                    String
-                )
-            }
         })
+    }
+
+    fn count<T>(values: &[T]) -> Result<i64> {
+        Ok(values.len() as i64)
     }
 
     fn first<T: Clone>(values: &[T]) -> Result<T> {
