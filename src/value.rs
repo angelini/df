@@ -1,4 +1,6 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::f64;
 use std::fmt;
 use std::num;
 use std::result;
@@ -49,6 +51,40 @@ impl fmt::Display for Error {
 }
 
 type Result<T> = result::Result<T, Error>;
+
+pub trait Nullable {
+    fn is_null(&self) -> bool;
+}
+
+impl Nullable for bool {
+    fn is_null(&self) -> bool {
+        false
+    }
+}
+
+impl Nullable for i64 {
+    fn is_null(&self) -> bool {
+        false
+    }
+}
+
+impl Nullable for f64 {
+    fn is_null(&self) -> bool {
+        self.is_nan()
+    }
+}
+
+impl Nullable for R64 {
+    fn is_null(&self) -> bool {
+        false
+    }
+}
+
+impl Nullable for String {
+    fn is_null(&self) -> bool {
+        false
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum Type {
@@ -111,6 +147,12 @@ impl From<i64> for Value {
     }
 }
 
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Value::Float(R64::from_inner(value))
+    }
+}
+
 impl From<R64> for Value {
     fn from(value: R64) -> Self {
         Value::Float(value)
@@ -132,6 +174,12 @@ impl From<Vec<bool>> for Value {
 impl From<Vec<i64>> for Value {
     fn from(value: Vec<i64>) -> Self {
         Value::IntList(value)
+    }
+}
+
+impl From<Vec<f64>> for Value {
+    fn from(value: Vec<f64>) -> Self {
+        Value::FloatList(value.into_iter().map(R64::from_inner).collect())
     }
 }
 
@@ -160,7 +208,7 @@ fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
 pub enum ListValues {
     Boolean(Vec<Vec<bool>>),
     Int(Vec<Vec<i64>>),
-    Float(Vec<Vec<R64>>),
+    Float(Vec<Vec<f64>>),
     String(Vec<Vec<String>>),
 }
 
@@ -237,7 +285,9 @@ macro_rules! group_by {
         match *$v {
             Values::$l(_) => unimplemented!(),
             $(
-                Values::$t(ref values) => Values::from(ListValues::$t(Values::gen_group_by(values, $o))),
+                Values::$t(ref values) => Values::from(
+                    ListValues::$t(Values::gen_group_by(values, $o))
+                ),
             )*
         }
     };
@@ -258,7 +308,7 @@ macro_rules! keep {
 pub enum Values {
     Boolean(Vec<bool>),
     Int(Vec<i64>),
-    Float(Vec<R64>),
+    Float(Vec<f64>),
     String(Vec<String>),
     List(ListValues),
 }
@@ -270,26 +320,20 @@ impl Values {
                 values
                     .into_iter()
                     .map(|v| v.parse::<bool>())
-                    .collect::<result::Result<Vec<bool>, str::ParseBoolError>>()?
+                    .collect::<result::Result<Vec<bool>, str::ParseBoolError>>()?,
             ),
             Type::Int => Values::from(
                 values
                     .into_iter()
                     .map(|v| v.parse::<i64>())
-                    .collect::<result::Result<Vec<i64>, num::ParseIntError>>()?
+                    .collect::<result::Result<Vec<i64>, num::ParseIntError>>()?,
             ),
-            Type::Float => {
-                let floats = values
+            Type::Float => Values::from(
+                values
                     .into_iter()
                     .map(|v| v.parse::<f64>())
-                    .collect::<result::Result<Vec<f64>, num::ParseFloatError>>()?;
-                Values::from(
-                    floats
-                        .into_iter()
-                        .map(R64::from_inner)
-                        .collect::<Vec<R64>>(),
-                )
-            }
+                    .collect::<result::Result<Vec<f64>, num::ParseFloatError>>()?,
+            ),
             Type::String => Values::from(
                 values
                     .into_iter()
@@ -344,7 +388,7 @@ impl Values {
         match *self {
             Values::Boolean(ref values) => values[left] == values[right],
             Values::Int(ref values) => values[left] == values[right],
-            Values::Float(ref values) => values[left] == values[right],
+            Values::Float(ref values) => (values[left] - values[right]).abs() < f64::EPSILON,
             Values::String(ref values) => values[left] == values[right],
             Values::List(_) => unimplemented!(),
         }
@@ -358,7 +402,7 @@ impl Values {
         keep!(self, indices, List, Boolean, Int, Float, String)
     }
 
-    fn gen_order_by<T: Clone + Ord>(
+    fn gen_order_by<T: Clone + Nullable + PartialOrd>(
         values: &[T],
         sort_scores: &Option<HashMap<usize, usize>>,
         only_use_score: bool,
@@ -373,12 +417,12 @@ impl Values {
                     let left_score = sort_scores[&left_idx];
                     let right_score = sort_scores[&right_idx];
                     if left_score == right_score && !only_use_score {
-                        left_value.cmp(right_value)
+                        Self::nullable_partial_cmp(left_value, right_value)
                     } else {
                         left_score.cmp(&right_score)
                     }
                 }
-                None => left_value.cmp(right_value),
+                None => Self::nullable_partial_cmp(left_value, right_value),
             }
         });
         let mut new_scores = HashMap::new();
@@ -418,6 +462,16 @@ impl Values {
             .map(|idx| values[*idx].clone())
             .collect()
     }
+
+    fn nullable_partial_cmp<T: Nullable + PartialOrd>(left: &T, right: &T) -> Ordering {
+        left.partial_cmp(right).unwrap_or_else(
+            || if left.is_null() {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            },
+        )
+    }
 }
 
 impl From<Vec<bool>> for Values {
@@ -432,8 +486,8 @@ impl From<Vec<i64>> for Values {
     }
 }
 
-impl From<Vec<R64>> for Values {
-    fn from(values: Vec<R64>) -> Self {
+impl From<Vec<f64>> for Values {
+    fn from(values: Vec<f64>) -> Self {
         Values::Float(values)
     }
 }
@@ -455,11 +509,13 @@ impl From<Value> for Values {
         match value {
             Value::Boolean(value) => Values::Boolean(vec![value]),
             Value::Int(value) => Values::Int(vec![value]),
-            Value::Float(value) => Values::Float(vec![value]),
+            Value::Float(value) => Values::Float(vec![value.into_inner()]),
             Value::String(value) => Values::String(vec![value]),
             Value::BooleanList(value) => Values::List(ListValues::Boolean(vec![value])),
             Value::IntList(value) => Values::List(ListValues::Int(vec![value])),
-            Value::FloatList(value) => Values::List(ListValues::Float(vec![value])),
+            Value::FloatList(value) => Values::List(ListValues::Float(
+                vec![value.into_iter().map(|f| f.into_inner()).collect()],
+            )),
             Value::StringList(value) => Values::List(ListValues::String(vec![value])),
         }
     }
@@ -475,7 +531,7 @@ pub enum Comparator {
 }
 
 impl Comparator {
-    fn pass<T: Eq + Ord>(&self, left: &T, right: &T) -> bool {
+    fn pass<T: PartialEq + PartialOrd>(&self, left: &T, right: &T) -> bool {
         match *self {
             Comparator::Equal => left == right,
             Comparator::GreaterThan => left > right,
@@ -487,14 +543,22 @@ impl Comparator {
 }
 
 macro_rules! filter {
-    ( $p:expr, $v:expr, $l:ident, $( $t:ident ),* ) => {
+    ( $p:expr, $v:expr, $l:ident, $f:ident, $( $t:ident ),* ) => {
         match ($v, &$p.value) {
             $(
                 (&Values::$t(ref values), &Value::$t(ref value)) => {
-                    let (indices, filtered_values) = Predicate::gen_filter(&$p.comparator, values, value);
+                    let (indices, filtered_values) = Predicate::gen_filter(
+                        &$p.comparator, values, value
+                    );
                     Ok((indices, Values::from(filtered_values)))
                 }
             )*
+            (&Values::$f(ref values), &Value::$f(ref value)) => {
+                let (indices, filtered_values) = Predicate::gen_filter(
+                    &$p.comparator, values, &value.into_inner()
+                );
+                Ok((indices, Values::from(filtered_values)))
+            }
             (&Values::$l(_), _) => unimplemented!(),
             (values, value) => Err(Error::PredicateAndValueTypes(values.type_(), value.type_())),
         }
@@ -513,10 +577,10 @@ impl Predicate {
     }
 
     pub fn filter(&self, values: &Values) -> Result<(Vec<usize>, Values)> {
-        filter!(self, values, List, Boolean, Int, Float, String)
+        filter!(self, values, List, Float, Boolean, Int, String)
     }
 
-    fn gen_filter<T: Clone + Ord>(
+    fn gen_filter<T: Clone + PartialEq + PartialOrd>(
         comparator: &Comparator,
         values: &[T],
         value: &T,

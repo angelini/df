@@ -35,18 +35,18 @@ impl Entry {
 }
 
 macro_rules! get_value {
-    ( $p:expr, $c:expr, $r:expr, $( $t:ident, $l:ident ),* ) => {
+    ( $p:expr, $c:expr, $r:expr, $( $t:ident ),* ) => {
         match $p.entries.get($c).map(|entry| entry.values.as_ref()) {
             $(
                 Some(&Values::$t(ref values)) => {
-                    Pool::get_clone(values.as_ref(), $r).map(Value::$t)
+                    Pool::get_clone(values.as_ref(), $r).map(Value::from)
                 }
             )*
             Some(&Values::List(ref list_values)) => {
                 match *list_values {
                     $(
                         ListValues::$t(ref values) => {
-                            Pool::get_clone(values, $r).map(Value::$l)
+                            Pool::get_clone(values, $r).map(Value::from)
                         }
                     )*
                 }
@@ -98,19 +98,7 @@ impl Pool {
     }
 
     pub fn get_value(&self, col_idx: &u64, row_idx: &u64) -> Option<Value> {
-        get_value!(
-            self,
-            col_idx,
-            row_idx,
-            Boolean,
-            BooleanList,
-            Int,
-            IntList,
-            Float,
-            FloatList,
-            String,
-            StringList
-        )
+        get_value!(self, col_idx, row_idx, Boolean, Int, Float, String)
     }
 
     pub fn set_values(&mut self, idx: u64, values: Rc<Values>, sorted: bool) {

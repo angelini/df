@@ -1,8 +1,7 @@
+use std::cmp::Ordering;
 use std::fmt;
 
-use decorum::R64;
-
-use value::{ListValues, Type, Value, Values};
+use value::{ListValues, Nullable, Type, Value, Values};
 
 #[derive(Debug)]
 pub enum Error {
@@ -94,12 +93,8 @@ impl Aggregator {
                                 Values::from(
                                     values
                                         .iter()
-                                        .map(|vs| {
-                                            R64::from_inner(
-                                                vs.iter().sum::<i64>() as f64 / vs.len() as f64,
-                                            )
-                                        })
-                                        .collect::<Vec<R64>>(),
+                                        .map(|vs| vs.iter().sum::<i64>() as f64 / vs.len() as f64)
+                                        .collect::<Vec<f64>>(),
                                 )
                             }
                             ListValues::Float(ref values) => {
@@ -107,28 +102,22 @@ impl Aggregator {
                                     values
                                         .iter()
                                         .map(|vs| {
-                                            vs.iter().fold(
-                                                R64::from_inner(0.0),
-                                                |acc, &v| acc + v,
-                                            ) /
-                                                vs.len() as f64
+                                            vs.iter().fold(0.0, |acc, &v| acc + v) / vs.len() as f64
                                         })
-                                        .collect::<Vec<R64>>(),
+                                        .collect::<Vec<f64>>(),
                                 )
                             }
                             _ => return Err(Error::AverageOnInvalidType(input.type_())),
                         }
                     }
-                    Values::Int(ref values) => Values::from(Value::Float(R64::from_inner(
+                    Values::Int(ref values) => Values::from(vec![
                         values.iter().sum::<i64>() as f64 /
                             values.len() as f64,
-                    ))),
-                    Values::Float(ref values) => Values::from(Value::Float(
-                        values.iter().fold(
-                            R64::from_inner(0.0),
-                            |acc, &v| acc + v,
-                        ) / values.len() as f64,
-                    )),
+                    ]),
+                    Values::Float(ref values) => Values::from(vec![
+                        values.iter().fold(0.0, |acc, &v| acc + v) /
+                            values.len() as f64,
+                    ]),
                     _ => return Err(Error::AverageOnInvalidType(input.type_())),
                 }
             }
@@ -155,7 +144,7 @@ impl Aggregator {
                     Int,
                     i64,
                     Float,
-                    R64,
+                    f64,
                     String,
                     String
                 )
@@ -169,7 +158,7 @@ impl Aggregator {
                     Int,
                     i64,
                     Float,
-                    R64,
+                    f64,
                     String,
                     String
                 )
@@ -183,7 +172,7 @@ impl Aggregator {
                     Int,
                     i64,
                     Float,
-                    R64,
+                    f64,
                     String,
                     String
                 )
@@ -204,19 +193,17 @@ impl Aggregator {
                                 Values::from(
                                     values
                                         .iter()
-                                        .map(|vs| vs.iter().fold(R64::from_inner(0.0),
-                                                                 |acc, &v| acc + v))
-                                        .collect::<Vec<R64>>()
+                                        .map(|vs| vs.iter().fold(0.0, |acc, &v| acc + v))
+                                        .collect::<Vec<f64>>(),
                                 )
                             }
                             _ => return Err(Error::SumOnInvalidType(input.type_())),
                         }
                     }
                     Values::Int(ref values) => Values::from(Value::Int(values.iter().sum())),
-                    Values::Float(ref values) => Values::from(Value::Float(values.iter().fold(
-                        R64::from_inner(0.0),
-                        |acc, &v| acc + v,
-                    ))),
+                    Values::Float(ref values) => Values::from(
+                        vec![values.iter().fold(0.0, |acc, &v| acc + v)],
+                    ),
                     _ => return Err(Error::SumOnInvalidType(input.type_())),
                 }
             }
@@ -234,17 +221,41 @@ impl Aggregator {
         }
     }
 
-    fn max<T: Clone + Ord>(values: &[T]) -> Result<T> {
-        match values.iter().max() {
-            Some(v) => Ok(v.clone()),
-            None => Err(Error::EmptyColumn),
-        }
+    fn max<T: Clone + Nullable + PartialOrd>(values: &[T]) -> Result<T> {
+        let first = match values.first() {
+            Some(v) => v,
+            None => return Err(Error::EmptyColumn),
+        };
+        Ok(
+            values
+                .iter()
+                .skip(1)
+                .fold(first, |acc, v| match acc.partial_cmp(v) {
+                    Some(Ordering::Equal) |
+                    Some(Ordering::Greater) => acc,
+                    Some(Ordering::Less) => v,
+                    None => if acc.is_null() { v } else { acc },
+                })
+                .clone(),
+        )
     }
 
-    fn min<T: Clone + Ord>(values: &[T]) -> Result<T> {
-        match values.iter().min() {
-            Some(v) => Ok(v.clone()),
-            None => Err(Error::EmptyColumn),
-        }
+    fn min<T: Clone + Nullable + PartialOrd>(values: &[T]) -> Result<T> {
+        let first = match values.first() {
+            Some(v) => v,
+            None => return Err(Error::EmptyColumn),
+        };
+        Ok(
+            values
+                .iter()
+                .skip(1)
+                .fold(first, |acc, v| match acc.partial_cmp(v) {
+                    Some(Ordering::Equal) |
+                    Some(Ordering::Less) => acc,
+                    Some(Ordering::Greater) => v,
+                    None => if acc.is_null() { v } else { acc },
+                })
+                .clone(),
+        )
     }
 }

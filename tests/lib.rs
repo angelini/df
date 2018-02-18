@@ -10,7 +10,6 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
-use decorum::R64;
 use tempdir::TempDir;
 
 use df::aggregate::Aggregator;
@@ -65,6 +64,8 @@ fn test_select() {
 }
 
 #[test]
+#[allow(unused_attributes)]
+#[rustfmt_skip]
 fn test_filter_eq() {
     let pool = Pool::new_ref();
     let df = from_vecs!(&pool,
@@ -184,7 +185,7 @@ fn test_agg_average() {
     let pool = Pool::new_ref();
     let df = from_vecs!(&pool, ("int", Type::Int, vec![1, 2, 3]));
     let output = df.aggregate(&agg!("int", Aggregator::Average));
-    assert_df_eq!(&pool, check(output), (R64::from_inner(2.0)));
+    assert_df_eq!(&pool, check(output), (2.0));
 }
 
 #[test]
@@ -265,6 +266,6 @@ fn test_from_csv() {
     );
     let df = df::from_csv(&pool, path.as_path(), &schema);
     assert_df_eq!(&pool, df.expect("Cannot build df from csv"),
-                  (true, 1, R64::from_inner(1.0), "hello world".to_string()),
-                  (false, 4, R64::from_inner(1.2), "fOObAr".to_string()));
+                  (true, 1, 1.0, "hello world".to_string()),
+                  (false, 4, 1.2, "fOObAr".to_string()));
 }

@@ -98,7 +98,9 @@ impl Schema {
         Schema {
             columns: columns
                 .into_iter()
-                .map(|&(name, ref type_)| Column::new(name.to_string(), type_.clone()))
+                .map(|&(name, ref type_)| {
+                    Column::new(name.to_string(), type_.clone())
+                })
                 .collect(),
         }
     }
@@ -176,7 +178,10 @@ impl DataFrame {
     pub fn new(pool: &PoolRef, schema: Schema, values: HashMap<String, Values>) -> DataFrame {
         let mut pool_indices = BTreeMap::new();
         for (col_name, col_values) in values {
-            pool_indices.insert(col_name, pool.lock().unwrap().set_initial_values(col_values));
+            pool_indices.insert(
+                col_name,
+                pool.lock().unwrap().set_initial_values(col_values),
+            );
         }
         DataFrame {
             schema,
@@ -257,10 +262,7 @@ impl DataFrame {
             .map(|column| if column_names.contains(&column.name.as_str()) {
                 column.clone()
             } else {
-                Column::new(
-                    column.name.clone(),
-                    Type::List(box column.type_.clone()),
-                )
+                Column::new(column.name.clone(), Type::List(box column.type_.clone()))
             })
             .collect::<Vec<Column>>();
         Ok(DataFrame {
@@ -317,7 +319,9 @@ impl DataFrame {
     pub fn call(&self, operation: &Operation) -> Result<DataFrame> {
         Ok(match *operation {
             Operation::Select(ref column_names) => self.select(&as_strs(column_names))?,
-            Operation::Filter(ref column_name, ref predicate) => self.filter(column_name, predicate)?,
+            Operation::Filter(ref column_name, ref predicate) => {
+                self.filter(column_name, predicate)?
+            }
             Operation::OrderBy(ref column_names) => self.order_by(&as_strs(column_names))?,
             Operation::GroupBy(ref column_names) => self.group_by(&as_strs(column_names))?,
             Operation::Aggregation(ref aggregators) => self.aggregate(aggregators)?,
@@ -375,7 +379,10 @@ impl DataFrame {
 
         let mut results = HashMap::new();
         for (name, idx) in &self.pool_indices {
-            results.insert(name.clone(), pool.lock().unwrap().get_entry(idx)?.values.as_ref().clone());
+            results.insert(
+                name.clone(),
+                pool.lock().unwrap().get_entry(idx)?.values.as_ref().clone(),
+            );
         }
         Ok(results)
     }
@@ -496,7 +503,11 @@ impl DataFrame {
                             parent_entry.sorted,
                         );
                     } else {
-                        pool.set_values(idx, Rc::new(parent_entry.values.group_by(&group_offsets)), false);
+                        pool.set_values(
+                            idx,
+                            Rc::new(parent_entry.values.group_by(&group_offsets)),
+                            false,
+                        );
                     }
                 }
             }
@@ -506,7 +517,11 @@ impl DataFrame {
                     let entry = pool.get_entry(idx)?;
                     if aggregators.contains_key(col_name) {
                         let aggregator = &aggregators[col_name];
-                        pool.set_values(new_idx, Rc::new(aggregator.aggregate(&entry.values)?), false)
+                        pool.set_values(
+                            new_idx,
+                            Rc::new(aggregator.aggregate(&entry.values)?),
+                            false,
+                        )
                     } else {
                         pool.set_values(new_idx, entry.values, entry.sorted)
                     }

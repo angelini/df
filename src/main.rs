@@ -65,7 +65,7 @@ fn main() {
         match command.as_str() {
             "example" => example().expect("Error in example"),
             "server" => server().expect("Error in server"),
-            _ => panic!("Unknown command")
+            _ => panic!("Unknown command"),
         }
     }
 }

@@ -150,7 +150,7 @@ def example_small():
     return Df.from_csv('data/small.csv', schema) \
              .filter('boolean', Predicate(Comparator.EQUAL, Value(True))) \
              .select(['int']) \
-             .aggregate({'int': Aggregator.SUM}) \
+             .aggregate({'int': Aggregator.AVERAGE}) \
              .collect()
 
 
