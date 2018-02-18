@@ -9,9 +9,10 @@ use hyper::header::ContentLength;
 use hyper::server::{Request, Response, Service};
 use serde_json;
 
-use dataframe::{self, DataFrame, Operation, Schema};
+use dataframe::{self, DataFrame, Operation};
 use pool::PoolRef;
-use serialize::{self, from_csv};
+use reader::Format;
+use schema::Schema;
 use timer;
 use value::Values;
 
@@ -20,7 +21,6 @@ enum Error {
     DataFrame(dataframe::Error),
     MalformedJSON,
     MissingDataFrame,
-    Serialize(serialize::Error),
 }
 
 impl Error {
@@ -32,12 +32,6 @@ impl Error {
 impl From<dataframe::Error> for Error {
     fn from(error: dataframe::Error) -> Error {
         Error::DataFrame(error)
-    }
-}
-
-impl From<serialize::Error> for Error {
-    fn from(error: serialize::Error) -> Error {
-        Error::Serialize(error)
     }
 }
 
@@ -95,12 +89,12 @@ fn execute_op(df: &DataFrame, operation: &Operation) -> Result<ResponseBody> {
     Ok(ResponseBody::from_dataframe(df.call(operation)?))
 }
 
-fn read_df(pool: &PoolRef, format: &str, path: &str, schema: &Schema) -> Result<ResponseBody> {
+fn read_df(format: &str, path: &str, schema: &Schema) -> Result<ResponseBody> {
     let df = match (format, path) {
-        ("csv", path) => from_csv(pool, Path::new(path), schema),
+        ("csv", path) => DataFrame::read(&Format::Csv, Path::new(path), schema),
         _ => unimplemented!(),
     };
-    Ok(ResponseBody::from_dataframe(df?))
+    Ok(ResponseBody::from_dataframe(df))
 }
 
 fn handle_request(pool: &PoolRef, req_body: RequestBody) -> Result<ResponseBody> {
@@ -113,7 +107,7 @@ fn handle_request(pool: &PoolRef, req_body: RequestBody) -> Result<ResponseBody>
             let df = req_body.dataframe.ok_or(Error::MissingDataFrame)?;
             execute_op(&df, &operation)
         }
-        RequestFunction::Read(scheme, path, schema) => read_df(pool, &scheme, &path, &schema),
+        RequestFunction::Read(scheme, path, schema) => read_df(&scheme, &path, &schema),
     }
 }
 

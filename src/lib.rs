@@ -20,10 +20,9 @@ pub mod api;
 pub mod dataframe;
 pub mod pool;
 pub mod timer;
-pub mod serialize;
+pub mod reader;
+pub mod schema;
 pub mod value;
-
-pub use serialize::from_csv;
 
 #[macro_export]
 macro_rules! agg {
@@ -58,7 +57,7 @@ macro_rules! predicate {
 #[macro_export]
 macro_rules! from_vecs {
     ( $p:expr, $( ($n:expr, $t:path, $v:expr) ),* ) => {{
-        let schema = df::dataframe::Schema::new(
+        let schema = df::schema::Schema::new(
             &[ $( ($n, $t) ),* ]
         );
         let mut values = std::collections::HashMap::new();
@@ -75,17 +74,10 @@ macro_rules! from_vecs {
 #[derive(Debug)]
 pub enum Error {
     DataFrame(dataframe::Error),
-    Serialize(serialize::Error),
 }
 
 impl From<dataframe::Error> for Error {
     fn from(error: dataframe::Error) -> Error {
         Error::DataFrame(error)
-    }
-}
-
-impl From<serialize::Error> for Error {
-    fn from(error: serialize::Error) -> Error {
-        Error::Serialize(error)
     }
 }

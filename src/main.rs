@@ -9,8 +9,10 @@ use std::sync::Arc;
 use hyper::server::Http;
 
 use df::aggregate::Aggregator;
-use df::dataframe::Schema;
+use df::dataframe::DataFrame;
 use df::pool::Pool;
+use df::reader::Format;
+use df::schema::Schema;
 use df::value::Type;
 
 fn example() -> Result<(), df::Error> {
@@ -36,7 +38,7 @@ fn example() -> Result<(), df::Error> {
         ],
     );
 
-    let line_items = df::from_csv(&pool, &Path::new("./data/line_items.csv"), &schema)?;
+    let line_items = DataFrame::read(&Format::Csv, &Path::new("./data/line_items.csv"), &schema);
     let total_key = line_items.select(&["order_key"])?.aggregate(&agg!(
         "order_key",
         Aggregator::Sum

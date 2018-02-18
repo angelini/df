@@ -3,11 +3,14 @@ use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::result;
 
 use aggregate::{self, Aggregator};
 use pool::{self, PoolRef};
+use reader::{self, Format};
+use schema::{Column, Schema};
 use value::{self, Predicate, Type, Value, Values};
 
 #[derive(Debug)]
@@ -19,6 +22,7 @@ pub enum Error {
     EmptyIndices,
     Aggregate(aggregate::Error),
     Pool(pool::Error),
+    Reader(reader::Error),
     Value(value::Error),
 }
 
@@ -31,6 +35,12 @@ impl From<aggregate::Error> for Error {
 impl From<pool::Error> for Error {
     fn from(error: pool::Error) -> Error {
         Error::Pool(error)
+    }
+}
+
+impl From<reader::Error> for Error {
+    fn from(error: reader::Error) -> Error {
+        Error::Reader(error)
     }
 }
 
@@ -58,6 +68,7 @@ impl fmt::Display for Error {
             Error::EmptyIndices => write!(f, "Empty pool indices"),
             Error::Aggregate(ref error) => write!(f, "{}", error),
             Error::Pool(ref error) => write!(f, "{}", error),
+            Error::Reader(ref error) => write!(f, "{}", error),
             Error::Value(ref error) => write!(f, "{}", error),
         }
     }
@@ -76,73 +87,9 @@ impl Row {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Column {
-    pub name: String,
-    pub type_: Type,
-}
-
-impl Column {
-    fn new(name: String, type_: Type) -> Column {
-        Column { name, type_ }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Schema {
-    pub columns: Vec<Column>,
-}
-
-impl Schema {
-    pub fn new(columns: &[(&str, Type)]) -> Schema {
-        Schema {
-            columns: columns
-                .into_iter()
-                .map(|&(name, ref type_)| {
-                    Column::new(name.to_string(), type_.clone())
-                })
-                .collect(),
-        }
-    }
-
-    pub fn keys(&self) -> Vec<&String> {
-        self.columns.iter().map(|column| &column.name).collect()
-    }
-
-    pub fn iter(&self) -> ::std::slice::Iter<Column> {
-        self.columns.iter()
-    }
-
-    pub fn type_(&self, name: &str) -> Option<Type> {
-        self.columns
-            .iter()
-            .find(|column| column.name == name)
-            .map(|column| column.type_.clone())
-            .clone()
-    }
-
-    fn select(&self, column_names: &[&str]) -> Schema {
-        Schema {
-            columns: self.columns
-                .iter()
-                .filter(|&column| column_names.contains(&column.name.as_str()))
-                .cloned()
-                .collect(),
-        }
-    }
-}
-
-impl IntoIterator for Schema {
-    type Item = Column;
-    type IntoIter = ::std::vec::IntoIter<Column>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.columns.into_iter()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Hash, Serialize)]
 pub enum Operation {
+    Read(Format, PathBuf),
     Select(Vec<String>),
     Filter(String, Predicate),
     OrderBy(Vec<String>),
@@ -171,12 +118,12 @@ pub struct DataFrame {
     operation: Option<Operation>,
     grouped_by: Vec<String>,
     ordered_by: Vec<String>,
-    pool_indices: BTreeMap<String, u64>,
+    pool_indices: HashMap<String, u64>,
 }
 
 impl DataFrame {
     pub fn new(pool: &PoolRef, schema: Schema, values: HashMap<String, Values>) -> DataFrame {
-        let mut pool_indices = BTreeMap::new();
+        let mut pool_indices = HashMap::new();
         for (col_name, col_values) in values {
             pool_indices.insert(
                 col_name,
@@ -190,6 +137,17 @@ impl DataFrame {
             operation: None,
             ordered_by: vec![],
             grouped_by: vec![],
+        }
+    }
+
+    pub fn read(format: &Format, path: &Path, schema: &Schema) -> DataFrame {
+        DataFrame {
+            schema: schema.clone(),
+            parent: None,
+            operation: Some(Operation::Read(format.clone(), path.to_path_buf())),
+            ordered_by: vec![],
+            grouped_by: vec![],
+            pool_indices: format.indices(path, schema),
         }
     }
 
@@ -318,6 +276,7 @@ impl DataFrame {
 
     pub fn call(&self, operation: &Operation) -> Result<DataFrame> {
         Ok(match *operation {
+            Operation::Read(_, _) => unimplemented!(),
             Operation::Select(ref column_names) => self.select(&as_strs(column_names))?,
             Operation::Filter(ref column_name, ref predicate) => {
                 self.filter(column_name, predicate)?
@@ -398,21 +357,42 @@ impl DataFrame {
     }
 
     fn materialize(&self, pool: &PoolRef) -> Result<()> {
-        let parent = match self.parent {
-            Some(ref parent) => parent,
-            None => return Ok(()),
-        };
         let operation = match self.operation {
             Some(ref op) => op,
             None => unreachable!(),
         };
 
+        if let Operation::Read(ref format, ref path) = *operation {
+            let mut values = format.read(path, &self.schema)?;
+            for (col_name, idx) in &self.pool_indices {
+                pool.lock().unwrap().set_values(
+                    *idx,
+                    Rc::new(
+                        values.remove(col_name).unwrap(),
+                    ),
+                    false,
+                )
+            }
+            return Ok(());
+        }
+
+        let parent = match self.parent {
+            Some(ref parent) => parent,
+            None => return Ok(()),
+        };
         if parent.should_materialize(pool) {
             parent.materialize(pool)?
         }
-
         let mut pool = pool.lock().unwrap();
+
         match *operation {
+            Operation::Read(ref format, ref path) => {
+                println!("format: {:?}", format);
+                let mut values = format.read(path, &self.schema)?;
+                for (col_name, idx) in &self.pool_indices {
+                    pool.set_values(*idx, Rc::new(values.remove(col_name).unwrap()), false)
+                }
+            }
             Operation::Select(_) => {
                 for (col_name, idx) in &self.pool_indices {
                     let parent_idx = parent.get_idx(col_name)?;
@@ -538,10 +518,7 @@ impl DataFrame {
             .map(|idx| *idx)
     }
 
-    fn new_indices(
-        operation: &Operation,
-        indices: &BTreeMap<String, u64>,
-    ) -> BTreeMap<String, u64> {
+    fn new_indices(operation: &Operation, indices: &HashMap<String, u64>) -> HashMap<String, u64> {
         indices
             .iter()
             .map(|(col_name, idx)| {

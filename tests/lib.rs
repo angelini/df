@@ -13,8 +13,10 @@ use std::path::PathBuf;
 use tempdir::TempDir;
 
 use df::aggregate::Aggregator;
-use df::dataframe::{DataFrame, Result, Schema};
+use df::dataframe::{DataFrame, Result};
 use df::pool::Pool;
+use df::reader::Format;
+use df::schema::Schema;
 use df::value::Type;
 
 macro_rules! assert_df_eq {
@@ -24,6 +26,9 @@ macro_rules! assert_df_eq {
             df::dataframe::Row::new(vec![$( df::value::Value::from($v), )*]),
         )*];
         assert_eq!(rows, expected);
+    };
+    ( $p:expr, $d:expr, $( [ $($v:expr),* ] ),* ) => {
+        assert_df_eq!($p, $d, $(($($v),*)),*)
     };
 }
 
@@ -251,7 +256,7 @@ fn test_agg_multiple_columns() {
 }
 
 #[test]
-fn test_from_csv() {
+fn test_read_csv() {
     let dir = TempDir::new("test_from_csv").unwrap();
     let path = write_csv(
         &dir,
@@ -267,8 +272,11 @@ fn test_from_csv() {
             ("string", Type::String),
         ],
     );
-    let df = df::from_csv(&pool, path.as_path(), &schema);
-    assert_df_eq!(&pool, df.expect("Cannot build df from csv"),
-                  (true, 1, 1.0, "hello world".to_string()),
-                  (false, 4, 1.2, "fOObAr".to_string()));
+    let df = DataFrame::read(&Format::Csv, path.as_path(), &schema);
+    assert_df_eq!(
+        &pool,
+        df,
+        [true, 1, 1.0, "hello world".to_string()],
+        [false, 4, 1.2, "fOObAr".to_string()]
+    );
 }
