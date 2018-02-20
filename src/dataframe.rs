@@ -11,6 +11,7 @@ use aggregate::{self, Aggregator};
 use pool::{self, PoolRef};
 use reader::{self, Format};
 use schema::{Column, Schema};
+use timer;
 use value::{self, Predicate, Type, Value, Values};
 
 #[derive(Debug)]
@@ -383,16 +384,10 @@ impl DataFrame {
         if parent.should_materialize(pool) {
             parent.materialize(pool)?
         }
+        timer::start(401, &format!("materialize - {:?}", operation));
         let mut pool = pool.lock().unwrap();
 
         match *operation {
-            Operation::Read(ref format, ref path) => {
-                println!("format: {:?}", format);
-                let mut values = format.read(path, &self.schema)?;
-                for (col_name, idx) in &self.pool_indices {
-                    pool.set_values(*idx, Rc::new(values.remove(col_name).unwrap()), false)
-                }
-            }
             Operation::Select(_) => {
                 for (col_name, idx) in &self.pool_indices {
                     let parent_idx = parent.get_idx(col_name)?;
@@ -507,7 +502,9 @@ impl DataFrame {
                     }
                 }
             }
+            _ => unreachable!()
         }
+        timer::stop(401);
         Ok(())
     }
 

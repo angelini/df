@@ -410,29 +410,44 @@ impl Values {
         if values.is_empty() {
             return (HashMap::new(), vec![]);
         }
-        let mut sorted = values.iter().enumerate().collect::<Vec<(usize, &T)>>();
-        sorted.sort_by(|&(left_idx, left_value), &(right_idx, right_value)| {
-            match *sort_scores {
-                Some(ref sort_scores) => {
-                    let left_score = sort_scores[&left_idx];
-                    let right_score = sort_scores[&right_idx];
+
+        let sorted = match *sort_scores {
+            Some(ref sort_scores) => {
+                let mut buffer = values
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| (idx, sort_scores[&idx], v))
+                    .collect::<Vec<(usize, usize, &T)>>();
+                buffer.sort_by(|&(_, left_score, left_value), &(_, right_score, right_value)| {
                     if left_score == right_score && !only_use_score {
                         Self::nullable_partial_cmp(left_value, right_value)
                     } else {
                         left_score.cmp(&right_score)
                     }
-                }
-                None => Self::nullable_partial_cmp(left_value, right_value),
+                });
+                buffer
+                    .into_iter()
+                    .map(|(idx, _, value)| (idx, value))
+                    .collect::<Vec<(usize, &T)>>()
             }
-        });
+            None => {
+                let mut buffer = values.iter().enumerate().collect::<Vec<(usize, &T)>>();
+                buffer.sort_by(|&(_, left_value), &(_, right_value)| {
+                    Self::nullable_partial_cmp(left_value, right_value)
+                });
+                buffer
+            }
+        };
+
         let mut new_scores = HashMap::new();
+        let mut previous_score = 0;
         new_scores.insert(sorted[0].0, 0);
         for (idx, &(row_idx, value)) in sorted.iter().enumerate().skip(1) {
-            let previous_score = new_scores[&sorted[idx - 1].0];
             if value == sorted[idx - 1].1 {
                 new_scores.insert(row_idx, previous_score);
             } else {
-                new_scores.insert(row_idx, previous_score + 1);
+                previous_score += 1;
+                new_scores.insert(row_idx, previous_score);
             }
         }
         (

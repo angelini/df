@@ -4,3 +4,4 @@
 df.iml
 data/*_full.csv
 Cargo.lock
+data/*_huge.csv

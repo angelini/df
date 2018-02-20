@@ -129,7 +129,6 @@ class Df:
 
     def aggregate(self, aggregators):
         serialized = {col: agg.serialize() for (col, agg) in aggregators.items()}
-        print('serialize {}'.format(serialized))
         return Df.call(self.dataframe, {'Op':
                                         {'Aggregation': serialized}})
 
@@ -210,3 +209,28 @@ def example_line_items(full=False):
              .aggregate({'quantity': Aggregator.SUM,
                          'extended_price': Aggregator.SUM}) \
              .collect()
+
+
+def bench():
+    schema = Schema([('order_key', Type.INT),
+                     ('part_key', Type.INT),
+                     ('supplier_key', Type.INT),
+                     ('line_number', Type.INT),
+                     ('quantity', Type.FLOAT),
+                     ('extended_price', Type.FLOAT),
+                     ('discount', Type.FLOAT),
+                     ('tax', Type.FLOAT),
+                     ('return_flag', Type.STRING),
+                     ('line_status', Type.STRING),
+                     ('ship_date', Type.STRING),
+                     ('commit_date', Type.STRING),
+                     ('receipt_date', Type.STRING),
+                     ('ship_instructions', Type.STRING),
+                     ('ship_mode', Type.STRING),
+                     ('comment', Type.STRING)])
+    path = 'data/line_items_full.csv'
+    return Df.from_csv(path, schema) \
+        .select(['part_key', 'quantity']) \
+        .group_by(['part_key']) \
+        .aggregate({'quantity': Aggregator.SUM}) \
+        .collect()
