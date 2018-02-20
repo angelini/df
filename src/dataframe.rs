@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::result;
 
+use fnv::FnvHashMap;
+
 use aggregate::{self, Aggregator};
 use pool::{self, PoolRef};
 use reader::{self, Format};
@@ -415,7 +417,7 @@ impl DataFrame {
                 }
             }
             Operation::OrderBy(ref col_names) => {
-                let mut sort_scores: Option<HashMap<usize, usize>> = None;
+                let mut sort_scores: Option<FnvHashMap<usize, usize>> = None;
                 for col_name in col_names {
                     let col_idx = parent.get_idx(col_name)?;
                     let entry = pool.get_entry(&col_idx)?;

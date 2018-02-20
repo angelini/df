@@ -5,6 +5,7 @@
 extern crate csv;
 extern crate decorum;
 extern crate futures;
+extern crate fnv;
 #[macro_use]
 extern crate lazy_static;
 extern crate hyper;

@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::f64;
 use std::fmt;
 use std::num;
@@ -7,6 +6,7 @@ use std::result;
 use std::str;
 
 use decorum::R64;
+use fnv::FnvHashMap;
 
 #[derive(Debug)]
 pub enum Error {
@@ -369,9 +369,9 @@ impl Values {
 
     pub fn order_by(
         &self,
-        sort_scores: &Option<HashMap<usize, usize>>,
+        sort_scores: &Option<FnvHashMap<usize, usize>>,
         only_use_scores: bool,
-    ) -> (HashMap<usize, usize>, Values) {
+    ) -> (FnvHashMap<usize, usize>, Values) {
         order_by!(
             self,
             sort_scores,
@@ -404,11 +404,11 @@ impl Values {
 
     fn gen_order_by<T: Clone + Nullable + PartialOrd>(
         values: &[T],
-        sort_scores: &Option<HashMap<usize, usize>>,
+        sort_scores: &Option<FnvHashMap<usize, usize>>,
         only_use_score: bool,
-    ) -> (HashMap<usize, usize>, Vec<T>) {
+    ) -> (FnvHashMap<usize, usize>, Vec<T>) {
         if values.is_empty() {
-            return (HashMap::new(), vec![]);
+            return (FnvHashMap::default(), vec![]);
         }
 
         let sorted = match *sort_scores {
@@ -439,7 +439,7 @@ impl Values {
             }
         };
 
-        let mut new_scores = HashMap::new();
+        let mut new_scores = FnvHashMap::default();
         let mut previous_score = 0;
         new_scores.insert(sorted[0].0, 0);
         for (idx, &(row_idx, value)) in sorted.iter().enumerate().skip(1) {
