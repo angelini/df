@@ -18,6 +18,7 @@ extern crate time;
 
 pub mod aggregate;
 pub mod api;
+mod block;
 pub mod dataframe;
 pub mod pool;
 pub mod timer;

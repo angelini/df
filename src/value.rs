@@ -546,7 +546,7 @@ pub enum Comparator {
 }
 
 impl Comparator {
-    fn pass<T: PartialEq + PartialOrd>(&self, left: &T, right: &T) -> bool {
+    pub fn pass<T: PartialEq + PartialOrd>(&self, left: &T, right: &T) -> bool {
         match *self {
             Comparator::Equal => left == right,
             Comparator::GreaterThan => left > right,
@@ -582,8 +582,8 @@ macro_rules! filter {
 
 #[derive(Clone, Debug, Deserialize, Hash, Serialize)]
 pub struct Predicate {
-    comparator: Comparator,
-    value: Value,
+    pub comparator: Comparator,
+    pub value: Value,
 }
 
 impl Predicate {
@@ -606,9 +606,6 @@ impl Predicate {
             .filter(|&(_, v)| comparator.pass(v, value))
             .map(|(k, v)| (k, v.clone()))
             .collect::<Vec<(usize, T)>>();
-        (
-            filtered.iter().map(|&(k, _)| k).collect(),
-            filtered.into_iter().map(|(_, v)| v).collect(),
-        )
+        filtered.into_iter().unzip()
     }
 }
