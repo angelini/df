@@ -18,7 +18,8 @@ extern crate time;
 
 pub mod aggregate;
 pub mod api;
-mod block;
+#[macro_use]
+pub mod block;
 pub mod dataframe;
 pub mod pool;
 pub mod timer;
@@ -53,23 +54,6 @@ macro_rules! predicate {
     }};
     ( <= $v:expr ) => {{
         df::value::Predicate::new(df::value::Comparator::LessThanOrEq, df::value::Value::from($v))
-    }};
-}
-
-#[macro_export]
-macro_rules! from_vecs {
-    ( $p:expr, $( ($n:expr, $t:path, $v:expr) ),* ) => {{
-        let schema = df::schema::Schema::new(
-            &[ $( ($n, $t) ),* ]
-        );
-        let mut values = std::collections::HashMap::new();
-        $(
-            values.insert($n.to_string(), df::value::Values::from($v));
-        )*
-        df::dataframe::DataFrame::new($p, schema, values)
-    }};
-    ( $p:expr, $( [$n:expr, $t:path, $v:expr] ),* ) => {{
-        from_vecs!($p, $(($n, $t, $v)),*)
     }};
 }
 

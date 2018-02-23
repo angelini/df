@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use rand::{self, Rng};
 
-use value::{ListValues, Value, Values};
+use block::{Block};
+use value::Value;
 
 #[derive(Debug)]
 pub enum Error {
@@ -24,36 +25,14 @@ type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
-    pub values: Rc<Values>,
+    pub block: Rc<Block>,
     pub sorted: bool,
 }
 
 impl Entry {
-    fn new(values: Rc<Values>, sorted: bool) -> Entry {
-        Entry { values, sorted }
+    fn new(block: Rc<Block>, sorted: bool) -> Entry {
+        Entry { block, sorted }
     }
-}
-
-macro_rules! get_value {
-    ( $p:expr, $c:expr, $r:expr, $( $t:ident ),* ) => {
-        match $p.entries.get($c).map(|entry| entry.values.as_ref()) {
-            $(
-                Some(&Values::$t(ref values)) => {
-                    Pool::get_clone(values.as_ref(), $r).map(Value::from)
-                }
-            )*
-            Some(&Values::List(ref list_values)) => {
-                match *list_values {
-                    $(
-                        ListValues::$t(ref values) => {
-                            Pool::get_clone(values, $r).map(Value::from)
-                        }
-                    )*
-                }
-            }
-            None => None
-        }
-    };
 }
 
 #[derive(Debug, Default)]
@@ -73,14 +52,7 @@ impl Pool {
     }
 
     pub fn len(&self, idx: &u64) -> usize {
-        match self.entries.get(idx).map(|entry| entry.values.as_ref()) {
-            Some(&Values::Boolean(ref values)) => values.len(),
-            Some(&Values::Int(ref values)) => values.len(),
-            Some(&Values::Float(ref values)) => values.len(),
-            Some(&Values::String(ref values)) => values.len(),
-            Some(&Values::List(ref values)) => values.len(),
-            None => 0,
-        }
+        self.entries.get(idx).map(|entry| entry.block.len()).unwrap_or(0)
     }
 
     pub fn is_column_materialized(&self, idx: &u64) -> bool {
@@ -98,29 +70,18 @@ impl Pool {
     }
 
     pub fn get_value(&self, col_idx: &u64, row_idx: &u64) -> Option<Value> {
-        get_value!(self, col_idx, row_idx, Boolean, Int, Float, String)
+        // FIXME: should accept row_idx as usize
+        self.entries.get(col_idx).map(|entry| entry.block.get(*row_idx as usize))
     }
 
-    pub fn set_values(&mut self, idx: u64, values: Rc<Values>, sorted: bool) {
-        self.entries.insert(idx, Entry::new(values, sorted));
+    pub fn set_block(&mut self, idx: u64, block: Rc<Block>, sorted: bool) {
+        self.entries.insert(idx, Entry::new(block, sorted));
     }
 
-    pub fn set_initial_values(&mut self, values: Values) -> u64 {
+    pub fn set_initial_block(&mut self, block: Box<Block>) -> u64 {
         let idx = self.unused_idx();
-        self.entries.insert(idx, Entry::new(Rc::new(values), false));
+        self.entries.insert(idx, Entry::new(Rc::from(block), false));
         idx
-    }
-
-    fn get_clone<T>(slice: &[T], idx: &u64) -> Option<T>
-    where
-        T: Clone,
-    {
-        let idx = *idx as usize;
-        if slice.len() > idx {
-            Some(slice[idx].clone())
-        } else {
-            None
-        }
     }
 
     fn unused_idx(&self) -> u64 {

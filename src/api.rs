@@ -9,12 +9,12 @@ use hyper::header::ContentLength;
 use hyper::server::{Request, Response, Service};
 use serde_json;
 
+use block::AnyBlock;
 use dataframe::{self, DataFrame, Operation};
 use pool::PoolRef;
 use reader::Format;
 use schema::Schema;
 use timer;
-use value::Values;
 
 #[derive(Debug)]
 enum Error {
@@ -60,28 +60,28 @@ struct RequestBody {
 #[derive(Debug, Deserialize, Serialize)]
 struct ResponseBody {
     dataframe: DataFrame,
-    values: HashMap<String, Values>,
+    blocks: HashMap<String, AnyBlock>,
 }
 
 impl ResponseBody {
     fn from_dataframe(dataframe: DataFrame) -> ResponseBody {
         ResponseBody {
             dataframe,
-            values: HashMap::new(),
+            blocks: HashMap::new(),
         }
     }
 }
 
 fn execute_action(pool: &PoolRef, df: &DataFrame, action: &Action) -> Result<ResponseBody> {
     timer::start(301, &format!("execute action - {:?}", action));
-    let values = match *action {
-        Action::Collect => df.as_values(pool)?,
+    let blocks = match *action {
+        Action::Collect => df.as_blocks(pool)?,
         _ => unimplemented!(),
     };
     timer::stop(301);
     Ok(ResponseBody {
         dataframe: df.clone(),
-        values,
+        blocks,
     })
 }
 

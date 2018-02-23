@@ -108,7 +108,7 @@ class Df:
         if not res.ok:
             raise ValueError(res.content)
         json = res.json()
-        return Df(json['dataframe'], json['values'])
+        return Df(json['dataframe'], json['blocks'])
 
     @staticmethod
     def from_csv(path, schema):
