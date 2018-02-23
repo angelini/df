@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
+use std::f64;
 use std::fmt;
 use std::num;
+use std::result;
 use std::str;
 
 use fnv::FnvHashMap;
@@ -49,7 +51,7 @@ impl fmt::Display for Error {
     }
 }
 
-type Result<T> = ::std::result::Result<T, Error>;
+type Result<T> = result::Result<T, Error>;
 
 #[allow(dead_code)]
 type BlockRef<T> = Box<Block<Item = T>>;
@@ -61,27 +63,29 @@ trait Block {
 
     fn type_(&self) -> Type;
     fn len(&self) -> usize;
+
     fn equal_at_idxs(&self, usize, usize) -> bool;
     fn select_by_idx(&self, &[usize]) -> BlockRef<Self::Item>;
+
     fn filter(&self, &Predicate) -> Result<(Vec<usize>, BlockRef<Self::Item>)>;
     fn order_by(&self, &Option<SortScores>, bool) -> (SortScores, BlockRef<Self::Item>);
-    // fn group_by(&self, &[usize]) -> BlockRef<Self::Item>;
+    fn group_by(&self, &[usize]) -> BlockRef<Vec<Self::Item>>;
 
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
-fn gen_select_by_idx<T: Copy>(values: &[T], indices: &[usize]) -> Vec<T> {
+fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
     values
         .iter()
         .enumerate()
         .filter(|&(k, _)| indices.contains(&k))
-        .map(|(_, v)| *v)
+        .map(|(_, v)| v.clone())
         .collect()
 }
 
-fn gen_filter<T: Copy + PartialEq + PartialOrd>(
+fn gen_filter<T: Clone + PartialEq + PartialOrd>(
     comparator: &Comparator,
     values: &[T],
     value: &T,
@@ -90,7 +94,7 @@ fn gen_filter<T: Copy + PartialEq + PartialOrd>(
         .iter()
         .enumerate()
         .filter(|&(_, v)| comparator.pass(v, value))
-        .map(|(k, v)| (k, *v))
+        .map(|(k, v)| (k, v.clone()))
         .collect::<Vec<(usize, T)>>();
     filtered.into_iter().unzip()
 }
@@ -105,7 +109,7 @@ fn nullable_partial_cmp<T: Nullable + PartialOrd>(left: &T, right: &T) -> Orderi
     )
 }
 
-fn gen_order_by<T: Copy + Nullable + PartialOrd>(
+fn gen_order_by<T: Clone + Nullable + PartialOrd>(
     values: &[T],
     sort_scores: &Option<SortScores>,
     only_use_score: bool,
@@ -156,16 +160,16 @@ fn gen_order_by<T: Copy + Nullable + PartialOrd>(
     }
     (
         new_scores,
-        sorted.into_iter().map(|(_, v)| *v).collect(),
+        sorted.into_iter().map(|(_, v)| v.clone()).collect(),
     )
 }
 
-fn gen_group_by<T: Copy>(values: &[T], group_offsets: &[usize]) -> Vec<Vec<T>> {
+fn gen_group_by<T: Clone>(values: &[T], group_offsets: &[usize]) -> Vec<Vec<T>> {
     let mut offset_index = 0;
     let mut outer = vec![];
     let mut inner = vec![];
     for (idx, value) in values.iter().enumerate() {
-        inner.push(*value);
+        inner.push(value.clone());
         if idx == group_offsets[offset_index] {
             outer.push(inner);
             inner = vec![];
@@ -176,6 +180,60 @@ fn gen_group_by<T: Copy>(values: &[T], group_offsets: &[usize]) -> Vec<Vec<T>> {
 }
 
 #[derive(Debug, Clone)]
+struct ListBlock<T> {
+    values: Vec<Vec<T>>,
+    inner_type: Type,
+}
+
+impl<T> ListBlock<T> {
+    fn new(values: Vec<Vec<T>>, inner_type: Type) -> Self {
+        ListBlock { values, inner_type }
+    }
+}
+
+impl<T: 'static> Block for ListBlock<T>
+where
+    T: Clone + PartialEq,
+{
+    type Item = Vec<T>;
+
+    fn type_(&self) -> Type {
+        Type::List(box self.inner_type.clone())
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
+        self.values[left] == self.values[right]
+    }
+
+    fn select_by_idx(&self, indices: &[usize]) -> BlockRef<Self::Item> {
+        box ListBlock::new(
+            gen_select_by_idx(&self.values, indices),
+            self.inner_type.clone(),
+        )
+    }
+
+    fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, BlockRef<Self::Item>)> {
+        unimplemented!()
+    }
+
+    fn order_by(
+        &self,
+        sort_scores: &Option<FnvHashMap<usize, usize>>,
+        only_use_scores: bool,
+    ) -> (SortScores, BlockRef<Self::Item>) {
+        unimplemented!()
+    }
+
+    fn group_by(&self, group_offsets: &[usize]) -> BlockRef<Vec<Self::Item>> {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug, Clone)]
 struct BooleanBlock {
     values: Vec<bool>,
 }
@@ -183,6 +241,15 @@ struct BooleanBlock {
 impl BooleanBlock {
     fn new(values: Vec<bool>) -> Self {
         BooleanBlock { values }
+    }
+
+    fn from_strings(values: &[&str]) -> Result<BooleanBlock> {
+        Ok(BooleanBlock::new(
+            values
+                .into_iter()
+                .map(|v| v.parse::<bool>())
+                .collect::<result::Result<Vec<bool>, str::ParseBoolError>>()?,
+        ))
     }
 }
 
@@ -195,10 +262,6 @@ impl Block for BooleanBlock {
 
     fn len(&self) -> usize {
         self.values.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
@@ -230,25 +293,28 @@ impl Block for BooleanBlock {
         (indices, box BooleanBlock::new(ordered))
     }
 
-    // fn group_by(&self, group_offsets: &[usize]) -> BlockRef<Self::Item> {
-    //     box BooleanBlock::new(gen_group_by(&self.values, group_offsets))
-    // }
+    fn group_by(&self, group_offsets: &[usize]) -> BlockRef<Vec<Self::Item>> {
+        box ListBlock::new(gen_group_by(&self.values, group_offsets), Type::Boolean)
+    }
 }
 
 #[derive(Debug, Clone)]
 struct IntBlock {
-    max: i64,
-    min: i64,
     values: Vec<i64>,
 }
 
 impl IntBlock {
     fn new(values: Vec<i64>) -> Self {
-        IntBlock {
-            max: *values.iter().max().unwrap(),
-            min: *values.iter().min().unwrap(),
-            values,
-        }
+        IntBlock { values }
+    }
+
+    fn from_strings(values: &[&str]) -> Result<IntBlock> {
+        Ok(IntBlock::new(
+            values
+                .into_iter()
+                .map(|v| v.parse::<i64>())
+                .collect::<result::Result<Vec<i64>, num::ParseIntError>>()?,
+        ))
     }
 }
 
@@ -261,10 +327,6 @@ impl Block for IntBlock {
 
     fn len(&self) -> usize {
         self.values.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
@@ -296,7 +358,138 @@ impl Block for IntBlock {
         (indices, box IntBlock::new(ordered))
     }
 
-    // fn group_by(&self, group_offsets: &[usize]) -> BlockRef<Self::Item> {
-    //     box IntBlock::new(gen_group_by(&self.values, group_offsets))
-    // }
+    fn group_by(&self, group_offsets: &[usize]) -> BlockRef<Vec<Self::Item>> {
+        box ListBlock::new(gen_group_by(&self.values, group_offsets), Type::Int)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FloatBlock {
+    values: Vec<f64>,
+}
+
+impl FloatBlock {
+    fn new(values: Vec<f64>) -> Self {
+        FloatBlock { values }
+    }
+
+    fn from_strings(values: &[&str]) -> Result<FloatBlock> {
+        Ok(FloatBlock::new(
+            values
+                .into_iter()
+                .map(|v| v.parse::<f64>())
+                .collect::<result::Result<Vec<f64>, num::ParseFloatError>>()?,
+        ))
+    }
+}
+
+impl Block for FloatBlock {
+    type Item = f64;
+
+    fn type_(&self) -> Type {
+        Type::Float
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
+        (self.values[left] - self.values[right]).abs() < f64::EPSILON
+    }
+
+    fn select_by_idx(&self, indices: &[usize]) -> BlockRef<Self::Item> {
+        box FloatBlock::new(gen_select_by_idx(&self.values, indices))
+    }
+
+    fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, BlockRef<Self::Item>)> {
+        if let Value::Float(ref value) = predicate.value {
+            let (indices, filtered) =
+                gen_filter(&predicate.comparator, &self.values, &value.into_inner());
+            Ok((indices, box FloatBlock::new(filtered)))
+        } else {
+            Err(Error::PredicateAndValueTypes(
+                predicate.value.type_(),
+                self.type_(),
+            ))
+        }
+    }
+
+    fn order_by(
+        &self,
+        sort_scores: &Option<FnvHashMap<usize, usize>>,
+        only_use_scores: bool,
+    ) -> (SortScores, BlockRef<Self::Item>) {
+        let (indices, ordered) = gen_order_by(&self.values, sort_scores, only_use_scores);
+        (indices, box FloatBlock::new(ordered))
+    }
+
+    fn group_by(&self, group_offsets: &[usize]) -> BlockRef<Vec<Self::Item>> {
+        box ListBlock::new(gen_group_by(&self.values, group_offsets), Type::Float)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StringBlock {
+    values: Vec<String>,
+}
+
+impl StringBlock {
+    fn new(values: Vec<String>) -> Self {
+        StringBlock { values }
+    }
+
+    fn from_strings(values: &[&str]) -> Result<StringBlock> {
+        Ok(StringBlock::new(
+            values
+                .into_iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<String>>(),
+        ))
+    }
+}
+
+impl Block for StringBlock {
+    type Item = String;
+
+    fn type_(&self) -> Type {
+        Type::String
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
+        self.values[left] == self.values[right]
+    }
+
+    fn select_by_idx(&self, indices: &[usize]) -> BlockRef<Self::Item> {
+        box StringBlock::new(gen_select_by_idx(&self.values, indices))
+    }
+
+    fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, BlockRef<Self::Item>)> {
+        if let Value::String(ref value) = predicate.value {
+            let (indices, filtered) = gen_filter(&predicate.comparator, &self.values, value);
+            Ok((indices, box StringBlock::new(filtered)))
+        } else {
+            Err(Error::PredicateAndValueTypes(
+                predicate.value.type_(),
+                self.type_(),
+            ))
+        }
+    }
+
+    fn order_by(
+        &self,
+        sort_scores: &Option<FnvHashMap<usize, usize>>,
+        only_use_scores: bool,
+    ) -> (SortScores, BlockRef<Self::Item>) {
+        let (indices, ordered) = gen_order_by(&self.values, sort_scores, only_use_scores);
+        (indices, box StringBlock::new(ordered))
+    }
+
+    fn group_by(&self, group_offsets: &[usize]) -> BlockRef<Vec<Self::Item>> {
+        box ListBlock::new(gen_group_by(&self.values, group_offsets), Type::String)
+    }
 }
