@@ -11,12 +11,14 @@ use csv;
 use block::{self, Block};
 use schema::Schema;
 use timer;
+use value::{self, Type, Value};
 
 #[derive(Debug)]
 pub enum Error {
     Block(block::Error),
     Csv(csv::Error),
     Io(io::Error),
+    Value(value::Error),
 }
 
 impl fmt::Display for Error {
@@ -25,6 +27,7 @@ impl fmt::Display for Error {
             Error::Block(ref error) => write!(f, "{}", error),
             Error::Csv(ref error) => write!(f, "{}", error),
             Error::Io(ref error) => write!(f, "{}", error),
+            Error::Value(ref error) => write!(f, "{}", error),
         }
     }
 }
@@ -44,6 +47,12 @@ impl From<csv::Error> for Error {
 impl From<io::Error> for Error {
     fn from(error: io::Error) -> Error {
         Error::Io(error)
+    }
+}
+
+impl From<value::Error> for Error {
+    fn from(error: value::Error) -> Error {
+        Error::Value(error)
     }
 }
 
@@ -92,31 +101,26 @@ impl Reader for CsvReader {
             .has_headers(false)
             .delimiter(b'|')
             .from_reader(file);
-        let mut string_blocks = HashMap::new();
-        timer::start(101, "read_csv - read from disk");
+
+        let types = self.schema.iter().map(|c| &c.type_).collect::<Vec<&Type>>();
+        let mut blocks = block::empty_blocks(&types);
+        timer::start(101, "read CsvReader");
         for record in csv_reader.records() {
             let record = record?;
             for (idx, column) in self.schema.iter().enumerate() {
-                let entry = string_blocks.entry(&column.name).or_insert_with(|| vec![]);
-                // FIXME: pass references to the conversion fns
-                entry.push(record.get(idx).unwrap().to_string())
+                blocks[idx].push(Value::parse(
+                    &column.type_,
+                    record.get(idx).unwrap(),
+                )?)?;
             }
         }
         timer::stop(101);
-        timer::start(102, "read_csv - cast vecs to Blocks");
-        let blocks =
-            string_blocks
-                .into_iter()
-                .map(|(name, vals)| {
-                    let type_ = &self.schema.type_(name).unwrap();
-                    Ok((
-                        name.to_string(),
-                        block::from_strings(type_, vals)?,
-                    ))
-                })
-                .collect::<::std::result::Result<HashMap<String, Box<Block>>, block::Error>>()?;
-        timer::stop(102);
-        Ok(blocks)
+        Ok(
+            self.schema
+                .iter()
+                .map(|column| (column.name.to_string(), blocks.remove(0)))
+                .collect(),
+        )
     }
 }
 
@@ -129,13 +133,13 @@ pub enum Format {
 impl Format {
     pub fn indices(&self, path: &Path, schema: &Schema) -> HashMap<String, u64> {
         match *self {
-            Format::Csv => CsvReader::new(path, schema).indices()
+            Format::Csv => CsvReader::new(path, schema).indices(),
         }
     }
 
     pub fn read(&self, path: &Path, schema: &Schema) -> Result<HashMap<String, Box<Block>>> {
         match *self {
-            Format::Csv => CsvReader::new(path, schema).read()
+            Format::Csv => CsvReader::new(path, schema).read(),
         }
     }
 }

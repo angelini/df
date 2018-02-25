@@ -1,7 +1,44 @@
 use std::f64;
+use std::fmt;
+use std::num;
 use std::str;
 
 use decorum::R64;
+
+#[derive(Debug)]
+pub enum Error {
+    Parse(Type, String),
+}
+
+impl From<str::ParseBoolError> for Error {
+    fn from(error: str::ParseBoolError) -> Error {
+        Error::Parse(Type::Boolean, format!("{:?}", error))
+    }
+}
+
+impl From<num::ParseIntError> for Error {
+    fn from(error: num::ParseIntError) -> Error {
+        Error::Parse(Type::Int, format!("{:?}", error))
+    }
+}
+
+impl From<num::ParseFloatError> for Error {
+    fn from(error: num::ParseFloatError) -> Error {
+        Error::Parse(Type::Float, format!("{:?}", error))
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::Parse(ref type_, ref message) => {
+                write!(f, "Error parsing value of type {:?}: {}", type_, message)
+            }
+        }
+    }
+}
+
+type Result<T> = ::std::result::Result<T, Error>;
 
 pub trait Nullable {
     fn is_null(&self) -> bool;
@@ -71,6 +108,16 @@ macro_rules! value_type {
 }
 
 impl Value {
+    pub fn parse(type_: &Type, value: &str) -> Result<Value> {
+        match *type_ {
+            Type::Boolean => Ok(Value::from(value.parse::<bool>()?)),
+            Type::Int => Ok(Value::from(value.parse::<i64>()?)),
+            Type::Float => Ok(Value::from(value.parse::<f64>()?)),
+            Type::String => Ok(Value::from(value.to_string())),
+            _ => panic!()
+        }
+    }
+
     pub fn type_(&self) -> Type {
         value_type!(
             self,

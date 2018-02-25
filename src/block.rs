@@ -1,7 +1,6 @@
 use std::cmp;
 use std::f64;
 use std::fmt;
-use std::num;
 use std::result;
 use std::str;
 
@@ -12,27 +11,9 @@ use value::{Comparator, Predicate, Nullable, Type, Value};
 
 #[derive(Debug)]
 pub enum Error {
-    Parse(Type, String),
+    PushType(Type, Value),
     PredicateAndValueTypes(Type, Type),
     Aggregate(aggregate::Error),
-}
-
-impl From<str::ParseBoolError> for Error {
-    fn from(error: str::ParseBoolError) -> Error {
-        Error::Parse(Type::Boolean, format!("{:?}", error))
-    }
-}
-
-impl From<num::ParseIntError> for Error {
-    fn from(error: num::ParseIntError) -> Error {
-        Error::Parse(Type::Int, format!("{:?}", error))
-    }
-}
-
-impl From<num::ParseFloatError> for Error {
-    fn from(error: num::ParseFloatError) -> Error {
-        Error::Parse(Type::Float, format!("{:?}", error))
-    }
 }
 
 impl From<aggregate::Error> for Error {
@@ -44,8 +25,8 @@ impl From<aggregate::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::Parse(ref type_, ref message) => {
-                write!(f, "Error parsing value of type {:?}: {}", type_, message)
+            Error::PushType(ref col, ref val) => {
+                write!(f, "Error pushing value {:?} to a column of type {:?}", val, col)
             }
             Error::PredicateAndValueTypes(ref predicate_type, ref value_type) => {
                 write!(
@@ -121,7 +102,8 @@ pub trait Block: fmt::Debug {
     fn equal_at_idxs(&self, usize, usize) -> bool;
     fn select_by_idx(&self, &[usize]) -> Box<Block>;
 
-    fn get(&self, idx: usize) -> Value;
+    fn get(&self, usize) -> Value;
+    fn push(&mut self, Value) -> Result<()>;
 
     fn filter(&self, &Predicate) -> Result<(Vec<usize>, Box<Block>)>;
     fn order_by(&self, &Option<SortScores>, bool) -> (SortScores, Box<Block>);
@@ -390,6 +372,10 @@ impl Block for ListBlock {
         }
     }
 
+    fn push(&mut self, _value: Value) -> Result<()> {
+        unimplemented!()
+    }
+
     fn filter(&self, _predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
         unimplemented!()
     }
@@ -436,15 +422,6 @@ impl BooleanBlock {
     fn new(values: Vec<bool>) -> Self {
         BooleanBlock { values }
     }
-
-    fn from_strings(values: Vec<String>) -> Result<BooleanBlock> {
-        Ok(BooleanBlock::new(
-            values
-                .into_iter()
-                .map(|v| v.parse::<bool>())
-                .collect::<result::Result<Vec<bool>, str::ParseBoolError>>()?,
-        ))
-    }
 }
 
 impl Block for BooleanBlock {
@@ -466,6 +443,14 @@ impl Block for BooleanBlock {
 
     fn get(&self, idx: usize) -> Value {
         Value::from(self.values[idx])
+    }
+
+    fn push(&mut self, value: Value) -> Result<()> {
+        match value {
+            Value::Boolean(v) => self.values.push(v),
+            _ => return Err(Error::PushType(self.type_(), value))
+        }
+        Ok(())
     }
 
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
@@ -524,15 +509,6 @@ impl IntBlock {
     fn new(values: Vec<i64>) -> Self {
         IntBlock { values }
     }
-
-    fn from_strings(values: Vec<String>) -> Result<IntBlock> {
-        Ok(IntBlock::new(
-            values
-                .into_iter()
-                .map(|v| v.parse::<i64>())
-                .collect::<result::Result<Vec<i64>, num::ParseIntError>>()?,
-        ))
-    }
 }
 
 impl Block for IntBlock {
@@ -554,6 +530,14 @@ impl Block for IntBlock {
 
     fn get(&self, idx: usize) -> Value {
         Value::from(self.values[idx])
+    }
+
+    fn push(&mut self, value: Value) -> Result<()> {
+        match value {
+            Value::Int(v) => self.values.push(v),
+            _ => return Err(Error::PushType(self.type_(), value))
+        }
+        Ok(())
     }
 
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
@@ -610,15 +594,6 @@ impl FloatBlock {
     fn new(values: Vec<f64>) -> Self {
         FloatBlock { values }
     }
-
-    fn from_strings(values: Vec<String>) -> Result<FloatBlock> {
-        Ok(FloatBlock::new(
-            values
-                .into_iter()
-                .map(|v| v.parse::<f64>())
-                .collect::<result::Result<Vec<f64>, num::ParseFloatError>>()?,
-        ))
-    }
 }
 
 impl Block for FloatBlock {
@@ -640,6 +615,14 @@ impl Block for FloatBlock {
 
     fn get(&self, idx: usize) -> Value {
         Value::from(self.values[idx])
+    }
+
+    fn push(&mut self, value: Value) -> Result<()> {
+        match value {
+            Value::Float(v) => self.values.push(v.into_inner()),
+            _ => return Err(Error::PushType(self.type_(), value))
+        }
+        Ok(())
     }
 
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
@@ -696,10 +679,6 @@ impl StringBlock {
     fn new(values: Vec<String>) -> Self {
         StringBlock { values }
     }
-
-    fn from_strings(values: Vec<String>) -> Result<StringBlock> {
-        Ok(StringBlock::new(values))
-    }
 }
 
 impl Block for StringBlock {
@@ -721,6 +700,14 @@ impl Block for StringBlock {
 
     fn get(&self, idx: usize) -> Value {
         Value::from(self.values[idx].clone())
+    }
+
+    fn push(&mut self, value: Value) -> Result<()> {
+        match value {
+            Value::String(v) => self.values.push(v),
+            _ => return Err(Error::PushType(self.type_(), value))
+        }
+        Ok(())
     }
 
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
@@ -768,14 +755,18 @@ impl Block for StringBlock {
     }
 }
 
-pub fn from_strings(type_: &Type, strings: Vec<String>) -> Result<Box<Block>> {
-    Ok(match *type_ {
-        Type::Boolean => box BooleanBlock::from_strings(strings)?,
-        Type::Int => box IntBlock::from_strings(strings)?,
-        Type::Float => box FloatBlock::from_strings(strings)?,
-        Type::String => box StringBlock::from_strings(strings)?,
-        Type::List(_) => unimplemented!(),
-    })
+pub fn empty_blocks(types: &[&Type]) -> Vec<Box<Block>> {
+    let mut blocks: Vec<Box<Block>> = vec![];
+    for type_ in types.iter() {
+        match **type_ {
+            Type::Boolean => blocks.push(box BooleanBlock::new(vec![])),
+            Type::Int => blocks.push(box IntBlock::new(vec![])),
+            Type::Float => blocks.push(box FloatBlock::new(vec![])),
+            Type::String => blocks.push(box StringBlock::new(vec![])),
+            _ => unimplemented!(),
+        };
+    }
+    blocks
 }
 
 
