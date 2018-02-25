@@ -10,11 +10,12 @@ use std::result;
 use fnv::FnvHashMap;
 
 use aggregate::{self, Aggregator};
+use block::{self, AnyBlock, Block};
 use pool::{self, PoolRef};
 use reader::{self, Format};
 use schema::{Column, Schema};
 use timer;
-use value::{self, Predicate, Type, Value, Values};
+use value::{Predicate, Type, Value};
 
 #[derive(Debug)]
 pub enum Error {
@@ -24,14 +25,20 @@ pub enum Error {
     OrderByWithNoSortColumns,
     EmptyIndices,
     Aggregate(aggregate::Error),
+    Block(block::Error),
     Pool(pool::Error),
     Reader(reader::Error),
-    Value(value::Error),
 }
 
 impl From<aggregate::Error> for Error {
     fn from(error: aggregate::Error) -> Error {
         Error::Aggregate(error)
+    }
+}
+
+impl From<block::Error> for Error {
+    fn from(error: block::Error) -> Error {
+        Error::Block(error)
     }
 }
 
@@ -44,12 +51,6 @@ impl From<pool::Error> for Error {
 impl From<reader::Error> for Error {
     fn from(error: reader::Error) -> Error {
         Error::Reader(error)
-    }
-}
-
-impl From<value::Error> for Error {
-    fn from(error: value::Error) -> Error {
-        Error::Value(error)
     }
 }
 
@@ -70,9 +71,9 @@ impl fmt::Display for Error {
             }
             Error::EmptyIndices => write!(f, "Empty pool indices"),
             Error::Aggregate(ref error) => write!(f, "{}", error),
+            Error::Block(ref error) => write!(f, "{}", error),
             Error::Pool(ref error) => write!(f, "{}", error),
             Error::Reader(ref error) => write!(f, "{}", error),
-            Error::Value(ref error) => write!(f, "{}", error),
         }
     }
 }
@@ -125,13 +126,10 @@ pub struct DataFrame {
 }
 
 impl DataFrame {
-    pub fn new(pool: &PoolRef, schema: Schema, values: HashMap<String, Values>) -> DataFrame {
+    pub fn new(pool: &PoolRef, schema: Schema, blocks: HashMap<String, Box<Block>>) -> DataFrame {
         let mut pool_indices = HashMap::new();
-        for (col_name, col_values) in values {
-            pool_indices.insert(
-                col_name,
-                pool.lock().unwrap().set_initial_values(col_values),
-            );
+        for (col_name, block) in blocks {
+            pool_indices.insert(col_name, pool.lock().unwrap().set_initial_block(block));
         }
         DataFrame {
             schema,
@@ -334,7 +332,7 @@ impl DataFrame {
         }
     }
 
-    pub fn as_values(&self, pool: &PoolRef) -> Result<HashMap<String, Values>> {
+    pub fn as_blocks(&self, pool: &PoolRef) -> Result<HashMap<String, AnyBlock>> {
         if self.should_materialize(pool) {
             self.materialize(pool)?;
         }
@@ -343,7 +341,7 @@ impl DataFrame {
         for (name, idx) in &self.pool_indices {
             results.insert(
                 name.clone(),
-                pool.lock().unwrap().get_entry(idx)?.values.as_ref().clone(),
+                pool.lock().unwrap().get_entry(idx)?.block.into_any_block(),
             );
         }
         Ok(results)
@@ -366,12 +364,12 @@ impl DataFrame {
         };
 
         if let Operation::Read(ref format, ref path) = *operation {
-            let mut values = format.read(path, &self.schema)?;
+            let mut blocks = format.read(path, &self.schema)?;
             for (col_name, idx) in &self.pool_indices {
-                pool.lock().unwrap().set_values(
+                pool.lock().unwrap().set_block(
                     *idx,
-                    Rc::new(
-                        values.remove(col_name).unwrap(),
+                    Rc::from(
+                        blocks.remove(col_name).unwrap()
                     ),
                     false,
                 )
@@ -387,6 +385,8 @@ impl DataFrame {
             parent.materialize(pool)?
         }
         timer::start(401, &format!("materialize - {:?}", operation));
+
+        // FIXME: don't hold the lock for all of materialize
         let mut pool = pool.lock().unwrap();
 
         match *operation {
@@ -394,16 +394,16 @@ impl DataFrame {
                 for (col_name, idx) in &self.pool_indices {
                     let parent_idx = parent.get_idx(col_name)?;
                     let parent_entry = pool.get_entry(&parent_idx)?;
-                    pool.set_values(*idx, parent_entry.values, parent_entry.sorted)
+                    pool.set_block(*idx, parent_entry.block, parent_entry.sorted)
                 }
             }
             Operation::Filter(ref filter_col_name, ref predicate) => {
                 let filter_col_idx = parent.get_idx(filter_col_name)?;
                 let filter_entry = pool.get_entry(&filter_col_idx)?;
-                let (filter_pass_idxs, filtered_values) = predicate.filter(&filter_entry.values)?;
-                pool.set_values(
+                let (filter_pass_idxs, filtered_block) = filter_entry.block.filter(predicate)?;
+                pool.set_block(
                     operation.hash_from_seed(&filter_col_idx, filter_col_name),
-                    Rc::new(filtered_values),
+                    Rc::from(filtered_block),
                     filter_entry.sorted,
                 );
 
@@ -411,8 +411,8 @@ impl DataFrame {
                     if col_name != filter_col_name {
                         let new_idx = operation.hash_from_seed(idx, col_name);
                         let entry = pool.get_entry(idx)?;
-                        let values = entry.values.select_by_idx(&filter_pass_idxs);
-                        pool.set_values(new_idx, Rc::new(values), entry.sorted)
+                        let block = entry.block.select_by_idx(&filter_pass_idxs);
+                        pool.set_block(new_idx, Rc::from(block), entry.sorted)
                     }
                 }
             }
@@ -421,10 +421,10 @@ impl DataFrame {
                 for col_name in col_names {
                     let col_idx = parent.get_idx(col_name)?;
                     let entry = pool.get_entry(&col_idx)?;
-                    let (sort_indices, values) = entry.values.order_by(&sort_scores, false);
-                    pool.set_values(
+                    let (sort_indices, block) = entry.block.order_by(&sort_scores, false);
+                    pool.set_block(
                         operation.hash_from_seed(&col_idx, col_name),
-                        Rc::new(values),
+                        Rc::from(block),
                         sort_scores.is_none(),
                     );
                     sort_scores = Some(sort_indices);
@@ -436,10 +436,10 @@ impl DataFrame {
                         for col_name in missing {
                             let idx = parent.get_idx(col_name)?;
                             let entry = pool.get_entry(&idx)?;
-                            let (_, values) = entry.values.order_by(&sort_scores, true);
-                            pool.set_values(
+                            let (_, block) = entry.block.order_by(&sort_scores, true);
+                            pool.set_block(
                                 operation.hash_from_seed(&idx, col_name),
-                                Rc::new(values),
+                                Rc::from(block),
                                 false,
                             );
                         }
@@ -453,15 +453,15 @@ impl DataFrame {
                 for col_name in col_names {
                     let parent_idx = parent.get_idx(col_name)?;
                     let parent_entry = pool.get_entry(&parent_idx)?;
-                    len = parent_entry.values.len();
-                    group_columns.push(parent_entry.values);
+                    len = parent_entry.block.len();
+                    group_columns.push(parent_entry.block);
                 }
 
                 let mut group_offsets = vec![];
                 for row_idx in 0..(len - 1) {
                     let next_is_different = group_columns
                         .iter()
-                        .map(|vals| vals.equal_at_idxs(row_idx, row_idx + 1))
+                        .map(|block| block.equal_at_idxs(row_idx, row_idx + 1))
                         .any(|is_equal| !is_equal);
                     if next_is_different {
                         group_offsets.push(row_idx);
@@ -474,15 +474,15 @@ impl DataFrame {
                     let parent_entry = pool.get_entry(&parent_idx)?;
                     let idx = self.get_idx(col_name)?;
                     if col_names.contains(col_name) {
-                        pool.set_values(
+                        pool.set_block(
                             idx,
-                            Rc::new(parent_entry.values.keep(&group_offsets)),
+                            Rc::from(parent_entry.block.select_by_idx(&group_offsets)),
                             parent_entry.sorted,
                         );
                     } else {
-                        pool.set_values(
+                        pool.set_block(
                             idx,
-                            Rc::new(parent_entry.values.group_by(&group_offsets)),
+                            Rc::from(parent_entry.block.group_by(&group_offsets)),
                             false,
                         );
                     }
@@ -494,17 +494,17 @@ impl DataFrame {
                     let entry = pool.get_entry(idx)?;
                     if aggregators.contains_key(col_name) {
                         let aggregator = &aggregators[col_name];
-                        pool.set_values(
+                        pool.set_block(
                             new_idx,
-                            Rc::new(aggregator.aggregate(&entry.values)?),
+                            Rc::from(entry.block.aggregate(aggregator)?),
                             false,
                         )
                     } else {
-                        pool.set_values(new_idx, entry.values, entry.sorted)
+                        pool.set_block(new_idx, entry.block, entry.sorted)
                     }
                 }
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
         timer::stop(401);
         Ok(())
