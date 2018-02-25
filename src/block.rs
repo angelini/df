@@ -136,11 +136,9 @@ pub trait Block: fmt::Debug {
 }
 
 fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
-    values
-        .iter()
-        .enumerate()
-        .filter(|&(k, _)| indices.contains(&k))
-        .map(|(_, v)| v.clone())
+    indices
+        .into_iter()
+        .map(|idx| values[*idx].clone())
         .collect()
 }
 
