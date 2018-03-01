@@ -10,7 +10,6 @@ use csv;
 
 use block::{self, Block};
 use schema::Schema;
-use timer;
 use value::{self, Type, Value};
 
 #[derive(Debug)]
@@ -89,9 +88,7 @@ impl Reader for CsvReader {
         self.schema
             .keys()
             .iter()
-            .map(|column_name| {
-                (column_name.to_string(), self.generate_index(column_name))
-            })
+            .map(|column_name| (column_name.to_string(), self.generate_index(column_name)))
             .collect()
     }
 
@@ -103,27 +100,21 @@ impl Reader for CsvReader {
             .from_reader(file);
 
         let types = self.schema.iter().map(|c| &c.type_).collect::<Vec<&Type>>();
-        let mut blocks = block::empty_blocks(&types);
-        timer::start(101, "read CsvReader");
+        let mut builders = block::builders(&types);
+        let id = timer_start!("read CsvReader");
         for record in csv_reader.records() {
             let record = record?;
             for (idx, column) in self.schema.iter().enumerate() {
-                blocks[idx].push(Value::parse(
-                    &column.type_,
-                    record.get(idx).unwrap(),
-                )?)?;
+                builders[idx].push(Value::parse(&column.type_, record.get(idx).unwrap())?)?;
             }
         }
-        timer::stop(101);
-        Ok(
-            self.schema
-                .iter()
-                .map(|column| (column.name.to_string(), blocks.remove(0)))
-                .collect(),
-        )
+        timer_stop!(id);
+        Ok(self.schema
+            .iter()
+            .map(|column| (column.name.to_string(), builders.remove(0).build()))
+            .collect())
     }
 }
-
 
 #[derive(Clone, Debug, Deserialize, Hash, Serialize)]
 pub enum Format {

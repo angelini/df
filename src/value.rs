@@ -74,6 +74,12 @@ impl Nullable for String {
     }
 }
 
+impl<'a> Nullable for &'a str {
+    fn is_null(&self) -> bool {
+        false
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum Type {
     Boolean,
@@ -114,7 +120,7 @@ impl Value {
             Type::Int => Ok(Value::from(value.parse::<i64>()?)),
             Type::Float => Ok(Value::from(value.parse::<f64>()?)),
             Type::String => Ok(Value::from(value.to_string())),
-            _ => panic!()
+            _ => panic!(),
         }
     }
 
@@ -163,6 +169,12 @@ impl From<String> for Value {
     }
 }
 
+impl<'a> From<&'a str> for Value {
+    fn from(value: &str) -> Self {
+        Value::String(value.to_string())
+    }
+}
+
 impl From<Vec<bool>> for Value {
     fn from(value: Vec<bool>) -> Self {
         Value::BooleanList(value)
@@ -190,6 +202,12 @@ impl From<Vec<R64>> for Value {
 impl From<Vec<String>> for Value {
     fn from(value: Vec<String>) -> Self {
         Value::StringList(value)
+    }
+}
+
+impl<'a> From<Vec<&'a str>> for Value {
+    fn from(value: Vec<&str>) -> Self {
+        Value::StringList(value.into_iter().map(|s| s.to_string()).collect())
     }
 }
 

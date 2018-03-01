@@ -14,7 +14,6 @@ use dataframe::{self, DataFrame, Operation};
 use pool::PoolRef;
 use reader::Format;
 use schema::Schema;
-use timer;
 
 #[derive(Debug)]
 enum Error {
@@ -73,12 +72,12 @@ impl ResponseBody {
 }
 
 fn execute_action(pool: &PoolRef, df: &DataFrame, action: &Action) -> Result<ResponseBody> {
-    timer::start(301, &format!("execute action - {:?}", action));
+    let id = timer_start!(&format!("execute action - {:?}", action));
     let blocks = match *action {
         Action::Collect => df.as_blocks(pool)?,
         _ => unimplemented!(),
     };
-    timer::stop(301);
+    timer_stop!(id);
     Ok(ResponseBody {
         dataframe: df.clone(),
         blocks,
@@ -152,12 +151,13 @@ impl Service for Api {
         match (req.method(), req.path()) {
             (&Method::Post, "/call") => {
                 let pool = Arc::clone(&self.pool);
-                let res_future = req.body().concat2().map(move |b| {
-                    match serde_json::from_slice::<RequestBody>(b.as_ref()) {
-                        Ok(req_body) => serialize_response(handle_request(&pool, req_body)),
-                        Err(_) => serialize_response(Err(Error::MalformedJSON)),
-                    }
-                });
+                let res_future =
+                    req.body().concat2().map(move |b| {
+                        match serde_json::from_slice::<RequestBody>(b.as_ref()) {
+                            Ok(req_body) => serialize_response(handle_request(&pool, req_body)),
+                            Err(_) => serialize_response(Err(Error::MalformedJSON)),
+                        }
+                    });
                 return box res_future;
             }
             _ => {

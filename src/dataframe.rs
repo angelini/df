@@ -14,7 +14,6 @@ use block::{self, AnyBlock, Block};
 use pool::{self, PoolRef};
 use reader::{self, Format};
 use schema::{Column, Schema};
-use timer;
 use value::{Predicate, Type, Value};
 
 #[derive(Debug)]
@@ -218,10 +217,12 @@ impl DataFrame {
         let columns = ordered
             .schema
             .iter()
-            .map(|column| if column_names.contains(&column.name.as_str()) {
-                column.clone()
-            } else {
-                Column::new(column.name.clone(), Type::List(box column.type_.clone()))
+            .map(|column| {
+                if column_names.contains(&column.name.as_str()) {
+                    column.clone()
+                } else {
+                    Column::new(column.name.clone(), Type::List(box column.type_.clone()))
+                }
             })
             .collect::<Vec<Column>>();
         Ok(DataFrame {
@@ -244,8 +245,8 @@ impl DataFrame {
                     overlap.iter().map(|s| s.to_string()).collect(),
                 ));
             }
-            let missing = &(&HashSet::from_iter(self.schema.keys()) - &aggregate_keys) -
-                &group_keys;
+            let missing =
+                &(&HashSet::from_iter(self.schema.keys()) - &aggregate_keys) - &group_keys;
             if !missing.is_empty() {
                 return Err(Error::MissingAggregates(
                     missing.iter().map(|s| s.to_string()).collect(),
@@ -254,14 +255,16 @@ impl DataFrame {
         }
         let columns = self.schema
             .iter()
-            .map(|column| if aggregators.contains_key(&column.name) {
-                let aggregator = &aggregators[&column.name];
-                Ok(Column::new(
-                    column.name.clone(),
-                    aggregator.output_type(&column.type_)?,
-                ))
-            } else {
-                Ok(column.clone())
+            .map(|column| {
+                if aggregators.contains_key(&column.name) {
+                    let aggregator = &aggregators[&column.name];
+                    Ok(Column::new(
+                        column.name.clone(),
+                        aggregator.output_type(&column.type_)?,
+                    ))
+                } else {
+                    Ok(column.clone())
+                }
             })
             .collect::<Result<Vec<Column>>>()?;
         let operation = Operation::Aggregation(aggregators.clone());
@@ -296,9 +299,10 @@ impl DataFrame {
         let mut row_idx = 0;
         let mut rows = vec![];
         let pool = pool.lock().unwrap();
-        let result_size = pool.len(
-            self.pool_indices.values().nth(0).ok_or(Error::EmptyIndices)?,
-        ) as u64;
+        let result_size = pool.len(self.pool_indices
+            .values()
+            .nth(0)
+            .ok_or(Error::EmptyIndices)?) as u64;
 
         loop {
             if row_idx == result_size {
@@ -308,21 +312,18 @@ impl DataFrame {
             for column in self.schema.iter() {
                 let col_idx = self.pool_indices[&column.name];
                 let value = match (&column.type_, pool.get_value(&col_idx, &row_idx)) {
-                    (&Type::Boolean, Some(value @ Value::Boolean(_))) |
-                    (&Type::Int, Some(value @ Value::Int(_))) |
-                    (&Type::Float, Some(value @ Value::Float(_))) |
-                    (&Type::String, Some(value @ Value::String(_))) |
-                    (&Type::List(box Type::Boolean), Some(value @ Value::BooleanList(_))) |
-                    (&Type::List(box Type::Int), Some(value @ Value::IntList(_))) |
-                    (&Type::List(box Type::Float), Some(value @ Value::FloatList(_))) |
-                    (&Type::List(box Type::String), Some(value @ Value::StringList(_))) => value,
-                    (_, None) => {
-                        panic!(format!(
-                            "Missing value: col => {:?}, row => {:?}",
-                            col_idx,
-                            row_idx
-                        ))
-                    }
+                    (&Type::Boolean, Some(value @ Value::Boolean(_)))
+                    | (&Type::Int, Some(value @ Value::Int(_)))
+                    | (&Type::Float, Some(value @ Value::Float(_)))
+                    | (&Type::String, Some(value @ Value::String(_)))
+                    | (&Type::List(box Type::Boolean), Some(value @ Value::BooleanList(_)))
+                    | (&Type::List(box Type::Int), Some(value @ Value::IntList(_)))
+                    | (&Type::List(box Type::Float), Some(value @ Value::FloatList(_)))
+                    | (&Type::List(box Type::String), Some(value @ Value::StringList(_))) => value,
+                    (_, None) => panic!(format!(
+                        "Missing value: col => {:?}, row => {:?}",
+                        col_idx, row_idx
+                    )),
                     (type_, value) => panic!(format!("Type error: {:?} != {:?}", type_, value)),
                 };
                 row_values.push(value)
@@ -352,9 +353,9 @@ impl DataFrame {
     }
 
     fn should_materialize(&self, pool: &PoolRef) -> bool {
-        self.pool_indices.values().any(|idx| {
-            !pool.lock().unwrap().is_column_materialized(idx)
-        })
+        self.pool_indices
+            .values()
+            .any(|idx| !pool.lock().unwrap().is_column_materialized(idx))
     }
 
     fn materialize(&self, pool: &PoolRef) -> Result<()> {
@@ -368,9 +369,7 @@ impl DataFrame {
             for (col_name, idx) in &self.pool_indices {
                 pool.lock().unwrap().set_block(
                     *idx,
-                    Rc::from(
-                        blocks.remove(col_name).unwrap()
-                    ),
+                    Rc::from(blocks.remove(col_name).unwrap()),
                     false,
                 )
             }
@@ -384,19 +383,17 @@ impl DataFrame {
         if parent.should_materialize(pool) {
             parent.materialize(pool)?
         }
-        timer::start(401, &format!("materialize - {:?}", operation));
+        let id = timer_start!(&format!("materialize - {:?}", operation));
 
         // FIXME: don't hold the lock for all of materialize
         let mut pool = pool.lock().unwrap();
 
         match *operation {
-            Operation::Select(_) => {
-                for (col_name, idx) in &self.pool_indices {
-                    let parent_idx = parent.get_idx(col_name)?;
-                    let parent_entry = pool.get_entry(&parent_idx)?;
-                    pool.set_block(*idx, parent_entry.block, parent_entry.sorted)
-                }
-            }
+            Operation::Select(_) => for (col_name, idx) in &self.pool_indices {
+                let parent_idx = parent.get_idx(col_name)?;
+                let parent_entry = pool.get_entry(&parent_idx)?;
+                pool.set_block(*idx, parent_entry.block, parent_entry.sorted)
+            },
             Operation::Filter(ref filter_col_name, ref predicate) => {
                 let filter_col_idx = parent.get_idx(filter_col_name)?;
                 let filter_entry = pool.get_entry(&filter_col_idx)?;
@@ -431,8 +428,8 @@ impl DataFrame {
                 }
                 match sort_scores {
                     Some(_) => {
-                        let missing: HashSet<&String> = &HashSet::from_iter(self.schema.keys()) -
-                            &HashSet::from_iter(col_names);
+                        let missing: HashSet<&String> = &HashSet::from_iter(self.schema.keys())
+                            - &HashSet::from_iter(col_names);
                         for col_name in missing {
                             let idx = parent.get_idx(col_name)?;
                             let entry = pool.get_entry(&idx)?;
@@ -494,11 +491,7 @@ impl DataFrame {
                     let entry = pool.get_entry(idx)?;
                     if aggregators.contains_key(col_name) {
                         let aggregator = &aggregators[col_name];
-                        pool.set_block(
-                            new_idx,
-                            Rc::from(entry.block.aggregate(aggregator)?),
-                            false,
-                        )
+                        pool.set_block(new_idx, Rc::from(entry.block.aggregate(aggregator)?), false)
                     } else {
                         pool.set_block(new_idx, entry.block, entry.sorted)
                     }
@@ -506,7 +499,7 @@ impl DataFrame {
             }
             _ => unreachable!(),
         }
-        timer::stop(401);
+        timer_stop!(id);
         Ok(())
     }
 
@@ -520,9 +513,7 @@ impl DataFrame {
     fn new_indices(operation: &Operation, indices: &HashMap<String, u64>) -> HashMap<String, u64> {
         indices
             .iter()
-            .map(|(col_name, idx)| {
-                (col_name.clone(), operation.hash_from_seed(idx, col_name))
-            })
+            .map(|(col_name, idx)| (col_name.clone(), operation.hash_from_seed(idx, col_name)))
             .collect()
     }
 }

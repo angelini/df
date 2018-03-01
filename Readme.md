@@ -8,7 +8,7 @@ Columnar in-memory DataFrames in Rust
 $ cargo build
 
 # In a python 3 virtualenv
-$ pip install ipython
+$ pip install ipython requests
 ```
 
 ### Server and Python client
