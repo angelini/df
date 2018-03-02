@@ -229,8 +229,16 @@ def bench():
                      ('ship_mode', Type.STRING),
                      ('comment', Type.STRING)])
     path = 'data/line_items_full.csv'
+    # .filter('ship_instructions', Predicate(Comparator.EQUAL, Value('DELIVER IN PERSON'))) \
+    # .filter('order_key', Predicate(Comparator.EQUAL, Value(1))) \
+    # .filter('ship_mode', Predicate(Comparator.EQUAL, Value('TRUCK'))) \
+    # return Df.from_csv(path, schema) \
+    #     .filter('ship_mode', Predicate(Comparator.EQUAL, Value('TRUCK'))) \
+    #     .select(['quantity']) \
+    #     .aggregate({'quantity': Aggregator.SUM}) \
+    #     .collect()
     return Df.from_csv(path, schema) \
-        .select(['part_key', 'quantity']) \
-        .group_by(['part_key']) \
-        .aggregate({'quantity': Aggregator.SUM}) \
+        .select(['ship_mode']) \
+        .order_by(['ship_mode']) \
+        .aggregate({'ship_mode': Aggregator.FIRST}) \
         .collect()

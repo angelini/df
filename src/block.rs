@@ -1,13 +1,14 @@
 use std::cmp;
 use std::f64;
 use std::fmt;
+use std::mem;
 use std::result;
 use std::str;
 
 use fnv;
 
 use aggregate::{self, Aggregator};
-use value::{Comparator, Predicate, Nullable, Type, Value};
+use value::{Comparator, Nullable, Predicate, Type, Value};
 
 #[derive(Debug)]
 pub enum Error {
@@ -25,17 +26,16 @@ impl From<aggregate::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::PushType(ref col, ref val) => {
-                write!(f, "Error pushing value {:?} to a column of type {:?}", val, col)
-            }
-            Error::PredicateAndValueTypes(ref predicate_type, ref value_type) => {
-                write!(
-                    f,
-                    "Predicate type ({:?}) and value type ({:?}) mismatch",
-                    predicate_type,
-                    value_type
-                )
-            }
+            Error::PushType(ref col, ref val) => write!(
+                f,
+                "Error pushing value {:?} to a column of type {:?}",
+                val, col
+            ),
+            Error::PredicateAndValueTypes(ref predicate_type, ref value_type) => write!(
+                f,
+                "Predicate type ({:?}) and value type ({:?}) mismatch",
+                predicate_type, value_type
+            ),
             Error::Aggregate(ref err) => write!(f, "{}", err),
         }
     }
@@ -95,6 +95,12 @@ from_anyblock!(
     [StringList, Vec<Vec<String>>]
 );
 
+impl<'a> From<Vec<&'a str>> for AnyBlock {
+    fn from(values: Vec<&'a str>) -> AnyBlock {
+        AnyBlock::String(values.into_iter().map(|s| s.to_string()).collect())
+    }
+}
+
 pub trait Block: fmt::Debug {
     fn type_(&self) -> Type;
     fn len(&self) -> usize;
@@ -103,7 +109,6 @@ pub trait Block: fmt::Debug {
     fn select_by_idx(&self, &[usize]) -> Box<Block>;
 
     fn get(&self, usize) -> Value;
-    fn push(&mut self, Value) -> Result<()>;
 
     fn filter(&self, &Predicate) -> Result<(Vec<usize>, Box<Block>)>;
     fn order_by(&self, &Option<SortScores>, bool) -> (SortScores, Box<Block>);
@@ -115,6 +120,11 @@ pub trait Block: fmt::Debug {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+pub trait BlockBuilder: fmt::Debug {
+    fn push(&mut self, Value) -> Result<()>;
+    fn build(self: Box<Self>) -> Box<Block>;
 }
 
 fn gen_select_by_idx<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
@@ -139,13 +149,13 @@ fn gen_filter<T: Clone + PartialEq + PartialOrd>(
 }
 
 fn nullable_partial_cmp<T: Nullable + PartialOrd>(left: &T, right: &T) -> cmp::Ordering {
-    left.partial_cmp(right).unwrap_or_else(
-        || if left.is_null() {
+    left.partial_cmp(right).unwrap_or_else(|| {
+        if left.is_null() {
             cmp::Ordering::Less
         } else {
             cmp::Ordering::Greater
-        },
-    )
+        }
+    })
 }
 
 fn gen_order_by<T: Clone + Nullable + PartialOrd>(
@@ -164,14 +174,15 @@ fn gen_order_by<T: Clone + Nullable + PartialOrd>(
                 .enumerate()
                 .map(|(idx, v)| (idx, sort_scores[&idx], v))
                 .collect::<Vec<(usize, usize, &T)>>();
-            buffer.sort_by(|&(_, left_score, left_value),
-             &(_, right_score, right_value)| {
-                if left_score == right_score && !only_use_score {
-                    nullable_partial_cmp(left_value, right_value)
-                } else {
-                    left_score.cmp(&right_score)
-                }
-            });
+            buffer.sort_by(
+                |&(_, left_score, left_value), &(_, right_score, right_value)| {
+                    if left_score == right_score && !only_use_score {
+                        nullable_partial_cmp(left_value, right_value)
+                    } else {
+                        left_score.cmp(&right_score)
+                    }
+                },
+            );
             buffer
                 .into_iter()
                 .map(|(idx, _, value)| (idx, value))
@@ -233,22 +244,18 @@ impl ListBlock {
                 Aggregator::Average,
                 Type::Boolean,
             ))),
-            ListBlock::Int(ref values) => {
-                Ok(box FloatBlock::new(
-                    values
-                        .iter()
-                        .map(|vs| vs.iter().sum::<i64>() as f64 / vs.len() as f64)
-                        .collect(),
-                ))
-            }
-            ListBlock::Float(ref values) => {
-                Ok(box FloatBlock::new(
-                    values
-                        .iter()
-                        .map(|vs| vs.iter().sum::<f64>() as f64 / vs.len() as f64)
-                        .collect(),
-                ))
-            }
+            ListBlock::Int(ref values) => Ok(box FloatBlock::new(
+                values
+                    .iter()
+                    .map(|vs| vs.iter().sum::<i64>() as f64 / vs.len() as f64)
+                    .collect(),
+            )),
+            ListBlock::Float(ref values) => Ok(box FloatBlock::new(
+                values
+                    .iter()
+                    .map(|vs| vs.iter().sum::<f64>() as f64 / vs.len() as f64)
+                    .collect(),
+            )),
             ListBlock::String(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
                 Aggregator::Average,
                 Type::String,
@@ -279,16 +286,12 @@ impl ListBlock {
                 Aggregator::Sum,
                 Type::Boolean,
             ))),
-            ListBlock::Int(ref values) => {
-                Ok(box IntBlock::new(
-                    values.iter().map(|vs| vs.iter().sum()).collect(),
-                ))
-            }
-            ListBlock::Float(ref values) => {
-                Ok(box FloatBlock::new(
-                    values.iter().map(|vs| vs.iter().sum()).collect(),
-                ))
-            }
+            ListBlock::Int(ref values) => Ok(box IntBlock::new(
+                values.iter().map(|vs| vs.iter().sum()).collect(),
+            )),
+            ListBlock::Float(ref values) => Ok(box FloatBlock::new(
+                values.iter().map(|vs| vs.iter().sum()).collect(),
+            )),
             ListBlock::String(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
                 Aggregator::Sum,
                 Type::String,
@@ -372,10 +375,6 @@ impl Block for ListBlock {
         }
     }
 
-    fn push(&mut self, _value: Value) -> Result<()> {
-        unimplemented!()
-    }
-
     fn filter(&self, _predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
         unimplemented!()
     }
@@ -445,14 +444,6 @@ impl Block for BooleanBlock {
         Value::from(self.values[idx])
     }
 
-    fn push(&mut self, value: Value) -> Result<()> {
-        match value {
-            Value::Boolean(v) => self.values.push(v),
-            _ => return Err(Error::PushType(self.type_(), value))
-        }
-        Ok(())
-    }
-
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
         if let Value::Boolean(ref value) = predicate.value {
             let (indices, filtered) = gen_filter(&predicate.comparator, &self.values, value);
@@ -481,22 +472,39 @@ impl Block for BooleanBlock {
     fn aggregate(&self, aggregator: &Aggregator) -> Result<Box<Block>> {
         match *aggregator {
             Aggregator::Count => Ok(box IntBlock::new(vec![self.len() as i64])),
-            Aggregator::First => Ok(box BooleanBlock::new(
-                vec![Aggregator::first(&self.values)?],
-            )),
+            Aggregator::First => Ok(box BooleanBlock::new(vec![
+                Aggregator::first(&self.values)?,
+            ])),
             Aggregator::Max => Ok(box BooleanBlock::new(vec![Aggregator::max(&self.values)?])),
             Aggregator::Min => Ok(box BooleanBlock::new(vec![Aggregator::min(&self.values)?])),
             Aggregator::Average | Aggregator::Sum => Err(Error::from(
-                aggregate::Error::AggregatorAndColumnType(
-                    aggregator.clone(),
-                    self.type_(),
-                ),
+                aggregate::Error::AggregatorAndColumnType(aggregator.clone(), self.type_()),
             )),
         }
     }
 
     fn into_any_block(&self) -> AnyBlock {
         AnyBlock::Boolean(self.values.clone())
+    }
+}
+
+#[derive(Debug, Default)]
+struct BooleanBlockBuilder {
+    values: Vec<bool>,
+}
+
+impl BlockBuilder for BooleanBlockBuilder {
+    fn push(&mut self, value: Value) -> Result<()> {
+        match value {
+            Value::Boolean(v) => self.values.push(v),
+            _ => return Err(Error::PushType(Type::Boolean, value)),
+        }
+        Ok(())
+    }
+
+    #[allow(boxed_local)]
+    fn build(self: Box<Self>) -> Box<Block> {
+        box BooleanBlock::new(self.values)
     }
 }
 
@@ -532,14 +540,6 @@ impl Block for IntBlock {
         Value::from(self.values[idx])
     }
 
-    fn push(&mut self, value: Value) -> Result<()> {
-        match value {
-            Value::Int(v) => self.values.push(v),
-            _ => return Err(Error::PushType(self.type_(), value))
-        }
-        Ok(())
-    }
-
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
         if let Value::Int(ref value) = predicate.value {
             let (indices, filtered) = gen_filter(&predicate.comparator, &self.values, value);
@@ -565,7 +565,6 @@ impl Block for IntBlock {
         box ListBlock::Int(gen_group_by(&self.values, group_offsets))
     }
 
-
     fn aggregate(&self, aggregator: &Aggregator) -> Result<Box<Block>> {
         match *aggregator {
             Aggregator::Average => {
@@ -582,6 +581,26 @@ impl Block for IntBlock {
 
     fn into_any_block(&self) -> AnyBlock {
         AnyBlock::Int(self.values.clone())
+    }
+}
+
+#[derive(Debug, Default)]
+struct IntBlockBuilder {
+    values: Vec<i64>,
+}
+
+impl BlockBuilder for IntBlockBuilder {
+    fn push(&mut self, value: Value) -> Result<()> {
+        match value {
+            Value::Int(v) => self.values.push(v),
+            _ => return Err(Error::PushType(Type::Int, value)),
+        }
+        Ok(())
+    }
+
+    #[allow(boxed_local)]
+    fn build(self: Box<Self>) -> Box<Block> {
+        box IntBlock::new(self.values)
     }
 }
 
@@ -615,14 +634,6 @@ impl Block for FloatBlock {
 
     fn get(&self, idx: usize) -> Value {
         Value::from(self.values[idx])
-    }
-
-    fn push(&mut self, value: Value) -> Result<()> {
-        match value {
-            Value::Float(v) => self.values.push(v.into_inner()),
-            _ => return Err(Error::PushType(self.type_(), value))
-        }
-        Ok(())
     }
 
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
@@ -670,14 +681,75 @@ impl Block for FloatBlock {
     }
 }
 
+#[derive(Debug, Default)]
+struct FloatBlockBuilder {
+    values: Vec<f64>,
+}
+
+impl BlockBuilder for FloatBlockBuilder {
+    fn push(&mut self, value: Value) -> Result<()> {
+        match value {
+            Value::Float(v) => self.values.push(v.into_inner()),
+            _ => return Err(Error::PushType(Type::Float, value)),
+        }
+        Ok(())
+    }
+
+    #[allow(boxed_local)]
+    fn build(self: Box<Self>) -> Box<Block> {
+        box FloatBlock::new(self.values)
+    }
+}
+
+const CHUNK_SIZE: usize = 1_000_000_000;
+
 #[derive(Clone, Debug)]
 struct StringBlock {
     values: Vec<String>,
+    indices: Vec<(usize, usize)>,
 }
 
 impl StringBlock {
     fn new(values: Vec<String>) -> Self {
-        StringBlock { values }
+        let mut builder = box StringBlockBuilder::default();
+        for value in values {
+            builder.push_primitive(&value)
+        }
+        builder.build_primitive()
+    }
+
+    fn from_slices(values: Vec<&str>) -> Self {
+        let mut builder = box StringBlockBuilder::default();
+        for value in values {
+            builder.push_primitive(value)
+        }
+        builder.build_primitive()
+    }
+
+    fn from_chunked(values: Vec<String>, indices: Vec<(usize, usize)>) -> Self {
+        StringBlock { values, indices }
+    }
+
+    fn get_primitive(&self, idx: &usize) -> Option<&str> {
+        if idx >= &self.indices.len() {
+            None
+        } else {
+            let (chunk_idx, str_start) = self.indices[*idx];
+            let chunk = &self.values[chunk_idx];
+            let str_end = if *idx == self.indices.len() - 1 {
+                chunk.len()
+            } else {
+                self.indices[idx + 1].1
+            };
+            Some(&chunk[str_start..str_end])
+        }
+    }
+
+    fn iter(&self) -> StringBlockIter {
+        StringBlockIter {
+            block: self,
+            idx: 0,
+        }
     }
 }
 
@@ -687,7 +759,7 @@ impl Block for StringBlock {
     }
 
     fn len(&self) -> usize {
-        self.values.len()
+        self.indices.len()
     }
 
     fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
@@ -695,25 +767,28 @@ impl Block for StringBlock {
     }
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
-        box StringBlock::new(gen_select_by_idx(&self.values, indices))
+        let mut builder = box StringBlockBuilder::default();
+        for idx in indices {
+            builder.push_primitive(self.get_primitive(idx).unwrap())
+        }
+        builder.build()
     }
 
     fn get(&self, idx: usize) -> Value {
-        Value::from(self.values[idx].clone())
-    }
-
-    fn push(&mut self, value: Value) -> Result<()> {
-        match value {
-            Value::String(v) => self.values.push(v),
-            _ => return Err(Error::PushType(self.type_(), value))
-        }
-        Ok(())
+        Value::from(self.get_primitive(&idx).unwrap())
     }
 
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
-        if let Value::String(ref value) = predicate.value {
-            let (indices, filtered) = gen_filter(&predicate.comparator, &self.values, value);
-            Ok((indices, box StringBlock::new(filtered)))
+        if let Value::String(ref pred_value) = predicate.value {
+            let mut builder = box StringBlockBuilder::default();
+            let mut indices = vec![];
+            for (idx, value) in self.iter().enumerate() {
+                if predicate.comparator.pass(&value, &pred_value.as_str()) {
+                    indices.push(idx);
+                    builder.push_primitive(value)
+                }
+            }
+            Ok((indices, builder.build()))
         } else {
             Err(Error::PredicateAndValueTypes(
                 predicate.value.type_(),
@@ -727,48 +802,120 @@ impl Block for StringBlock {
         sort_scores: &Option<fnv::FnvHashMap<usize, usize>>,
         only_use_scores: bool,
     ) -> (SortScores, Box<Block>) {
-        let (indices, ordered) = gen_order_by(&self.values, sort_scores, only_use_scores);
-        (indices, box StringBlock::new(ordered))
+        let values = &self.iter().collect::<Vec<&str>>();
+        let (indices, ordered) = gen_order_by(values, sort_scores, only_use_scores);
+        (indices, box StringBlock::from_slices(ordered))
     }
 
     fn group_by(&self, group_offsets: &[usize]) -> Box<Block> {
-        box ListBlock::String(gen_group_by(&self.values, group_offsets))
+        let values = &self.iter().collect::<Vec<&str>>();
+        let grouped = gen_group_by(values, group_offsets);
+        box ListBlock::String(
+            grouped
+                .into_iter()
+                .map(|vs| vs.into_iter().map(|v| v.to_string()).collect())
+                .collect(),
+        )
     }
 
     fn aggregate(&self, aggregator: &Aggregator) -> Result<Box<Block>> {
         match *aggregator {
-            Aggregator::Count => Ok(box IntBlock::new(vec![self.len() as i64])),
-            Aggregator::First => Ok(box StringBlock::new(vec![Aggregator::first(&self.values)?])),
-            Aggregator::Max => Ok(box StringBlock::new(vec![Aggregator::max(&self.values)?])),
-            Aggregator::Min => Ok(box StringBlock::new(vec![Aggregator::min(&self.values)?])),
-            Aggregator::Average | Aggregator::Sum => Err(Error::from(
-                aggregate::Error::AggregatorAndColumnType(
+            Aggregator::Count => Ok(box IntBlock::new(vec![self.indices.len() as i64])),
+            Aggregator::First => {
+                if self.is_empty() {
+                    Err(Error::from(aggregate::Error::EmptyColumn))
+                } else {
+                    Ok(box StringBlock::new(vec![
+                        self.get_primitive(&0).unwrap().to_string(),
+                    ]))
+                }
+            }
+            Aggregator::Max | Aggregator::Min | Aggregator::Average | Aggregator::Sum => {
+                Err(Error::from(aggregate::Error::AggregatorAndColumnType(
                     aggregator.clone(),
                     self.type_(),
-                ),
-            )),
+                )))
+            }
         }
     }
 
     fn into_any_block(&self) -> AnyBlock {
-        AnyBlock::String(self.values.clone())
+        AnyBlock::String(self.iter().map(|s| s.to_string()).collect())
     }
 }
 
-pub fn empty_blocks(types: &[&Type]) -> Vec<Box<Block>> {
-    let mut blocks: Vec<Box<Block>> = vec![];
+#[derive(Debug, Default)]
+struct StringBlockBuilder {
+    values: Vec<String>,
+    indices: Vec<(usize, usize)>,
+}
+
+impl StringBlockBuilder {
+    fn push_primitive(&mut self, value: &str) -> () {
+        if self.values.is_empty() {
+            self.values.push(String::new())
+        }
+        let mut current_len = self.values.last().unwrap().len();
+        if current_len + value.len() > CHUNK_SIZE {
+            self.values.push(String::new());
+            current_len = 0;
+        }
+
+        self.indices
+            .push((self.values.len() - 1, current_len));
+        self.values.last_mut().unwrap().push_str(value);
+    }
+
+    fn build_primitive(mut self) -> StringBlock {
+        let indices = mem::replace(&mut self.indices, vec![]);
+        StringBlock::from_chunked(self.values, indices)
+    }
+}
+
+impl BlockBuilder for StringBlockBuilder {
+    fn push(&mut self, value: Value) -> Result<()> {
+        match value {
+            Value::String(v) => self.push_primitive(&v),
+            _ => return Err(Error::PushType(Type::String, value)),
+        }
+        Ok(())
+    }
+
+    #[allow(boxed_local)]
+    fn build(self: Box<Self>) -> Box<Block> {
+        box self.build_primitive()
+    }
+}
+
+pub fn builders(types: &[&Type]) -> Vec<Box<BlockBuilder>> {
+    let mut builders: Vec<Box<BlockBuilder>> = vec![];
     for type_ in types.iter() {
         match **type_ {
-            Type::Boolean => blocks.push(box BooleanBlock::new(vec![])),
-            Type::Int => blocks.push(box IntBlock::new(vec![])),
-            Type::Float => blocks.push(box FloatBlock::new(vec![])),
-            Type::String => blocks.push(box StringBlock::new(vec![])),
+            Type::Boolean => builders.push(box BooleanBlockBuilder::default()),
+            Type::Int => builders.push(box IntBlockBuilder::default()),
+            Type::Float => builders.push(box FloatBlockBuilder::default()),
+            Type::String => builders.push(box StringBlockBuilder::default()),
             _ => unimplemented!(),
         };
     }
-    blocks
+    builders
 }
 
+struct StringBlockIter<'a> {
+    block: &'a StringBlock,
+    idx: usize,
+}
+
+impl<'a> Iterator for StringBlockIter<'a> {
+    type Item = &'a str;
+    fn next(&mut self) -> Option<Self::Item> {
+        let result = self.block.get_primitive(&self.idx);
+        if result.is_some() {
+            self.idx += 1
+        }
+        result
+    }
+}
 
 #[macro_export]
 macro_rules! from_vecs {

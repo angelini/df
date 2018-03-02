@@ -1,14 +1,13 @@
 #![feature(box_syntax, box_patterns, plugin)]
-
 #![plugin(clippy)]
 
 extern crate csv;
 extern crate decorum;
-extern crate futures;
 extern crate fnv;
+extern crate futures;
+extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
-extern crate hyper;
 extern crate rand;
 extern crate serde;
 #[macro_use]
@@ -16,13 +15,15 @@ extern crate serde_derive;
 extern crate serde_json;
 extern crate time;
 
+#[macro_use]
+mod timer;
+
 pub mod aggregate;
 pub mod api;
 #[macro_use]
 pub mod block;
 pub mod dataframe;
 pub mod pool;
-pub mod timer;
 pub mod reader;
 pub mod schema;
 pub mod value;
