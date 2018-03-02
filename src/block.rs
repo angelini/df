@@ -6,12 +6,16 @@ use std::result;
 use std::str;
 
 use fnv;
+use downcast_rs::Downcast;
 
 use aggregate::{self, Aggregator};
 use value::{Comparator, Nullable, Predicate, Type, Value};
 
 #[derive(Debug)]
 pub enum Error {
+    ArithmeticTypes(ArithmeticOp, Type, Type),
+    CombineSize(usize, usize),
+    Downcast(Type, Type),
     PushType(Type, Value),
     PredicateAndValueTypes(Type, Type),
     Aggregate(aggregate::Error),
@@ -26,22 +30,82 @@ impl From<aggregate::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::PushType(ref col, ref val) => write!(
-                f,
-                "Error pushing value {:?} to a column of type {:?}",
-                val, col
-            ),
-            Error::PredicateAndValueTypes(ref predicate_type, ref value_type) => write!(
-                f,
-                "Predicate type ({:?}) and value type ({:?}) mismatch",
-                predicate_type, value_type
-            ),
+            Error::ArithmeticTypes(ref operation, ref left, ref right) => {
+                write!(
+                    f,
+                    "Incompatible types for arithmetic operation {:?} ({:?}, {:?})",
+                    operation,
+                    left,
+                    right
+                )
+            }
+            Error::CombineSize(ref left, ref right) => {
+                write!(
+                    f,
+                    "Combine arguments with different sizes: {} and {}",
+                    left,
+                    right
+                )
+            }
+            Error::Downcast(ref expected, ref found) => {
+                write!(
+                    f,
+                    "Downcast error: expected: {:?}, found {:?}",
+                    expected,
+                    found
+                )
+            }
+            Error::PushType(ref col, ref val) => {
+                write!(
+                    f,
+                    "Error pushing value {:?} to a column of type {:?}",
+                    val,
+                    col
+                )
+            }
+            Error::PredicateAndValueTypes(ref predicate_type, ref value_type) => {
+                write!(
+                    f,
+                    "Predicate type ({:?}) and value type ({:?}) mismatch",
+                    predicate_type,
+                    value_type
+                )
+            }
             Error::Aggregate(ref err) => write!(f, "{}", err),
         }
     }
 }
 
 type Result<T> = result::Result<T, Error>;
+
+
+#[derive(Clone, Debug, Deserialize, Hash, PartialEq, Serialize)]
+pub enum ArithmeticOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+impl ArithmeticOp {
+    pub fn type_(&self, left: &Type, right: &Type) -> Result<Type> {
+        match (self, left, right) {
+            (&ArithmeticOp::Add, &Type::Int, &Type::Int) |
+            (&ArithmeticOp::Subtract, &Type::Int, &Type::Int) |
+            (&ArithmeticOp::Multiply, &Type::Int, &Type::Int) => Ok(Type::Int),
+            (&ArithmeticOp::Add, &Type::Float, &Type::Float) |
+            (&ArithmeticOp::Subtract, &Type::Float, &Type::Float) |
+            (&ArithmeticOp::Multiply, &Type::Float, &Type::Float) |
+            (&ArithmeticOp::Divide, &Type::Int, &Type::Int) |
+            (&ArithmeticOp::Divide, &Type::Float, &Type::Float) => Ok(Type::Float),
+            _ => Err(Error::ArithmeticTypes(
+                self.clone(),
+                left.clone(),
+                right.clone(),
+            )),
+        }
+    }
+}
 
 type SortScores = fnv::FnvHashMap<usize, usize>;
 
@@ -101,7 +165,7 @@ impl<'a> From<Vec<&'a str>> for AnyBlock {
     }
 }
 
-pub trait Block: fmt::Debug {
+pub trait Block: fmt::Debug + Downcast {
     fn type_(&self) -> Type;
     fn len(&self) -> usize;
 
@@ -115,12 +179,16 @@ pub trait Block: fmt::Debug {
     fn group_by(&self, &[usize]) -> Box<Block>;
     fn aggregate(&self, &Aggregator) -> Result<Box<Block>>;
 
+    fn combine(&self, &Block, &ArithmeticOp) -> Result<Box<Block>>;
+
     fn into_any_block(&self) -> AnyBlock;
 
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
+
+impl_downcast!(Block);
 
 pub trait BlockBuilder: fmt::Debug {
     fn push(&mut self, Value) -> Result<()>;
@@ -149,13 +217,13 @@ fn gen_filter<T: Clone + PartialEq + PartialOrd>(
 }
 
 fn nullable_partial_cmp<T: Nullable + PartialOrd>(left: &T, right: &T) -> cmp::Ordering {
-    left.partial_cmp(right).unwrap_or_else(|| {
-        if left.is_null() {
+    left.partial_cmp(right).unwrap_or_else(
+        || if left.is_null() {
             cmp::Ordering::Less
         } else {
             cmp::Ordering::Greater
-        }
-    })
+        },
+    )
 }
 
 fn gen_order_by<T: Clone + Nullable + PartialOrd>(
@@ -174,15 +242,14 @@ fn gen_order_by<T: Clone + Nullable + PartialOrd>(
                 .enumerate()
                 .map(|(idx, v)| (idx, sort_scores[&idx], v))
                 .collect::<Vec<(usize, usize, &T)>>();
-            buffer.sort_by(
-                |&(_, left_score, left_value), &(_, right_score, right_value)| {
-                    if left_score == right_score && !only_use_score {
-                        nullable_partial_cmp(left_value, right_value)
-                    } else {
-                        left_score.cmp(&right_score)
-                    }
-                },
-            );
+            buffer.sort_by(|&(_, left_score, left_value),
+             &(_, right_score, right_value)| {
+                if left_score == right_score && !only_use_score {
+                    nullable_partial_cmp(left_value, right_value)
+                } else {
+                    left_score.cmp(&right_score)
+                }
+            });
             buffer
                 .into_iter()
                 .map(|(idx, _, value)| (idx, value))
@@ -353,9 +420,7 @@ impl Block for ListBlock {
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
         match *self {
-            ListBlock::Bool(ref values) => {
-                box ListBlock::Bool(gen_select_by_idx(values, indices))
-            }
+            ListBlock::Bool(ref values) => box ListBlock::Bool(gen_select_by_idx(values, indices)),
             ListBlock::Int(ref values) => box ListBlock::Int(gen_select_by_idx(values, indices)),
             ListBlock::Float(ref values) => {
                 box ListBlock::Float(gen_select_by_idx(values, indices))
@@ -400,6 +465,10 @@ impl Block for ListBlock {
             Aggregator::Min => simple_list_aggregate!(self, Aggregator::min),
             Aggregator::Sum => self.sum(),
         }
+    }
+
+    fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
+        unimplemented!()
     }
 
     fn into_any_block(&self) -> AnyBlock {
@@ -478,9 +547,16 @@ impl Block for BoolBlock {
             Aggregator::Max => Ok(box BoolBlock::new(vec![Aggregator::max(&self.values)?])),
             Aggregator::Min => Ok(box BoolBlock::new(vec![Aggregator::min(&self.values)?])),
             Aggregator::Average | Aggregator::Sum => Err(Error::from(
-                aggregate::Error::AggregatorAndColumnType(aggregator.clone(), self.type_()),
+                aggregate::Error::AggregatorAndColumnType(
+                    aggregator.clone(),
+                    self.type_(),
+                ),
             )),
         }
+    }
+
+    fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
+        unimplemented!()
     }
 
     fn into_any_block(&self) -> AnyBlock {
@@ -509,12 +585,13 @@ impl BlockBuilder for BoolBlockBuilder {
 }
 
 #[derive(Debug, Clone)]
-struct IntBlock {
+pub struct IntBlock {
+    // FIXME: pub
     values: Vec<i64>,
 }
 
 impl IntBlock {
-    fn new(values: Vec<i64>) -> Self {
+    pub fn new(values: Vec<i64>) -> Self {
         IntBlock { values }
     }
 }
@@ -576,6 +653,36 @@ impl Block for IntBlock {
             Aggregator::Max => Ok(box IntBlock::new(vec![Aggregator::max(&self.values)?])),
             Aggregator::Min => Ok(box IntBlock::new(vec![Aggregator::min(&self.values)?])),
             Aggregator::Sum => Ok(box IntBlock::new(vec![self.values.iter().sum()])),
+        }
+    }
+
+    fn combine(&self, other: &Block, operation: &ArithmeticOp) -> Result<Box<Block>> {
+        if self.len() != other.len() {
+            return Err(Error::CombineSize(self.len(), other.len()));
+        }
+        let downcasted = other.downcast_ref::<IntBlock>().ok_or_else(|| {
+            Error::Downcast(Type::Int, other.type_())
+        })?;
+
+        let zipped = self.values.iter().zip(downcasted.values.iter());
+
+        if *operation == ArithmeticOp::Divide {
+            Ok(box FloatBlock::new(
+                zipped
+                    .map(|(left, right)| *left as f64 / *right as f64)
+                    .collect(),
+            ))
+        } else {
+            Ok(box IntBlock::new(
+                zipped
+                    .map(|(left, right)| match *operation {
+                        ArithmeticOp::Add => left + right,
+                        ArithmeticOp::Subtract => left - right,
+                        ArithmeticOp::Multiply => left * right,
+                        ArithmeticOp::Divide => unreachable!(),
+                    })
+                    .collect(),
+            ))
         }
     }
 
@@ -674,6 +781,28 @@ impl Block for FloatBlock {
             Aggregator::Min => Ok(box FloatBlock::new(vec![Aggregator::min(&self.values)?])),
             Aggregator::Sum => Ok(box FloatBlock::new(vec![self.values.iter().sum()])),
         }
+    }
+
+    fn combine(&self, other: &Block, operation: &ArithmeticOp) -> Result<Box<Block>> {
+        if self.len() != other.len() {
+            return Err(Error::CombineSize(self.len(), other.len()));
+        }
+        let downcasted = other.downcast_ref::<FloatBlock>().ok_or_else(|| {
+            Error::Downcast(Type::Float, other.type_())
+        })?;
+
+        Ok(box FloatBlock::new(
+            self.values
+                .iter()
+                .zip(downcasted.values.iter())
+                .map(|(left, right)| match *operation {
+                    ArithmeticOp::Add => left + right,
+                    ArithmeticOp::Subtract => left - right,
+                    ArithmeticOp::Multiply => left * right,
+                    ArithmeticOp::Divide => left / right,
+                })
+                .collect(),
+        ))
     }
 
     fn into_any_block(&self) -> AnyBlock {
@@ -839,6 +968,10 @@ impl Block for StringBlock {
         }
     }
 
+    fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
+        unimplemented!()
+    }
+
     fn into_any_block(&self) -> AnyBlock {
         AnyBlock::String(self.iter().map(|s| s.to_string()).collect())
     }
@@ -861,8 +994,7 @@ impl StringBlockBuilder {
             current_len = 0;
         }
 
-        self.indices
-            .push((self.values.len() - 1, current_len));
+        self.indices.push((self.values.len() - 1, current_len));
         self.values.last_mut().unwrap().push_str(value);
     }
 
@@ -887,16 +1019,20 @@ impl BlockBuilder for StringBlockBuilder {
     }
 }
 
+pub fn builder(type_: &Type) -> Box<BlockBuilder> {
+    match *type_ {
+        Type::Bool => box BoolBlockBuilder::default(),
+        Type::Int => box IntBlockBuilder::default(),
+        Type::Float => box FloatBlockBuilder::default(),
+        Type::String => box StringBlockBuilder::default(),
+        _ => unimplemented!(),
+    }
+}
+
 pub fn builders(types: &[&Type]) -> Vec<Box<BlockBuilder>> {
     let mut builders: Vec<Box<BlockBuilder>> = vec![];
     for type_ in types.iter() {
-        match **type_ {
-            Type::Bool => builders.push(box BoolBlockBuilder::default()),
-            Type::Int => builders.push(box IntBlockBuilder::default()),
-            Type::Float => builders.push(box FloatBlockBuilder::default()),
-            Type::String => builders.push(box StringBlockBuilder::default()),
-            _ => unimplemented!(),
-        };
+        builders.push(builder(type_))
     }
     builders
 }

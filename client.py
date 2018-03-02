@@ -95,6 +95,72 @@ class Aggregator(enum.Enum):
         return to_s[self]
 
 
+class ArithmeticOp(enum.Enum):
+    ADD = 1
+    SUBTRACT = 2
+    MULTIPLY = 3
+    DIVIDE = 4
+
+    def serialize(self):
+        to_s = {
+            ArithmeticOp.ADD: 'Add',
+            ArithmeticOp.SUBTRACT: 'Subtract',
+            ArithmeticOp.MULTIPLY: 'Multiply',
+            ArithmeticOp.DIVIDE: 'Divide',
+        }
+        return to_s[self]
+
+
+class ColumnExprKind(enum.Enum):
+    CONSTANT = 1
+    SOURCE = 2
+    ALIAS = 3
+    OPERATION = 4
+
+    def serialize(self):
+        to_s = {
+            ColumnExprKind.CONSTANT: 'Constant',
+            ColumnExprKind.SOURCE: 'Source',
+            ColumnExprKind.ALIAS: 'Alias',
+            ColumnExprKind.OPERATION: 'Operation',
+        }
+        return to_s[self]
+
+
+class ColumnExpr:
+
+    def __init__(self, kind, *args):
+        self.kind = kind
+        self.args = args
+
+    def from_arg(arg):
+        if isinstance(arg, Value):
+            return ColumnExpr(ColumnExprKind.CONSTANT, arg)
+        if isinstance(arg, str):
+            return ColumnExpr(ColumnExprKind.SOURCE, arg)
+        if isinstance(arg, (tuple, list)):
+            if len(arg) == 2:
+                return ColumnExpr(
+                    ColumnExprKind.ALIAS,
+                    arg[0],
+                    ColumnExpr.from_arg(arg[1])
+                )
+            if len(arg) == 3:
+                return ColumnExpr(
+                    ColumnExprKind.OPERATION,
+                    arg[0],
+                    ColumnExpr.from_arg(arg[1]),
+                    ColumnExpr.from_arg(arg[2])
+                )
+
+    def serialize(self):
+        if len(self.args) == 1:
+            arg = self.args[0]
+            return {self.kind.serialize(): arg.serialize() if not isinstance(arg, str) else arg}
+        return {self.kind.serialize(): [arg.serialize() if not isinstance(arg, str) else arg
+                                        for arg in self.args]}
+
+
 class Df:
 
     def __init__(self, dataframe, values):
@@ -103,6 +169,7 @@ class Df:
 
     @staticmethod
     def call(dataframe, function):
+        print(function)
         res = requests.post(URI, json={'dataframe': dataframe,
                                        'function': function})
         if not res.ok:
@@ -114,8 +181,12 @@ class Df:
     def from_csv(path, schema):
         return Df.call(None, {'Read': ['csv', path, schema.serialize()]})
 
-    def select(self, column_names):
-        return Df.call(self.dataframe, {'Op': {'Select': column_names}})
+    def select(self, args):
+        column_exprs = [
+            ColumnExpr.from_arg(arg).serialize()
+            for arg in args
+        ]
+        return Df.call(self.dataframe, {'Op': {'Select': column_exprs}})
 
     def filter(self, column_name, predicate):
         return Df.call(self.dataframe, {'Op': {'Filter': [column_name,
@@ -205,9 +276,27 @@ def example_line_items(full=False):
              .filter('ship_date', Predicate(Comparator.LESS_THAN_OR_EQ, Value('1998-12-01'))) \
              .group_by(['return_flag', 'line_status']) \
              .order_by(['return_flag', 'line_status']) \
-             .select(['return_flag', 'line_status', 'quantity', 'extended_price']) \
-             .aggregate({'quantity': Aggregator.SUM,
-                         'extended_price': Aggregator.SUM}) \
+             .select([
+                 'return_flag',
+                 'line_status',
+                 ('sum_qty', 'quantity'),
+                 ('sum_base_price', 'extended_price'),
+                 ('sum_disc_price', (ArithmeticOp.MULTIPLY, 'extended_price', (ArithmeticOp.SUBTRACT, Value(1), 'discount'))),
+                 ('sum_charge', (ArithmeticOp.MULTIPLY, 'extended_price',
+                                 (ArithmeticOp.MULTIPLY, (ArithmeticOp.SUBTRACT, Value(1), 'discount'), (ArithmeticOp.ADD, Value(1), 'tax')))),
+                 ('avg_qty', 'quantity'),
+                 ('avg_price', 'extended_price'),
+                 ('avg_disc', 'discount'),
+                 ('count_order', 'order_key'),
+             ]) \
+             .aggregate({'sum_qty': Aggregator.SUM,
+                         'sum_base_price': Aggregator.SUM,
+                         'sum_disc_price': Aggregator.SUM,
+                         'sum_charge': Aggregator.SUM,
+                         'avg_qty': Aggregator.AVERAGE,
+                         'avg_price': Aggregator.AVERAGE,
+                         'avg_disc': Aggregator.AVERAGE,
+                         'count_order': Aggregator.COUNT}) \
              .collect()
 
 

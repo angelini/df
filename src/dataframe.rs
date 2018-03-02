@@ -10,8 +10,8 @@ use std::result;
 use fnv::FnvHashMap;
 
 use aggregate::{self, Aggregator};
-use block::{self, AnyBlock, Block};
-use pool::{self, PoolRef};
+use block::{self, AnyBlock, ArithmeticOp, Block};
+use pool::{self, Entry, Pool, PoolRef};
 use reader::{self, Format};
 use schema::{Column, Schema};
 use value::{Predicate, Type, Value};
@@ -19,10 +19,13 @@ use value::{Predicate, Type, Value};
 #[derive(Debug)]
 pub enum Error {
     AggregatesOnGroupColumn(Vec<String>),
+    AliasRequired,
+    EmptyIndices,
     MissingAggregates(Vec<String>),
     MissingColumnInIndices(String),
+    MissingColumnInSchema(Schema, String),
     OrderByWithNoSortColumns,
-    EmptyIndices,
+    WithoutSource(String),
     Aggregate(aggregate::Error),
     Block(block::Error),
     Pool(pool::Error),
@@ -59,16 +62,23 @@ impl fmt::Display for Error {
             Error::AggregatesOnGroupColumn(ref col_names) => {
                 write!(f, "Aggregates on group columns {:?}", col_names)
             }
+            Error::AliasRequired => write!(f, "Alias required for column expressions"),
+            Error::EmptyIndices => write!(f, "Empty pool indices"),
             Error::MissingAggregates(ref col_names) => {
                 write!(f, "Missing aggregates for {:?}", col_names)
             }
             Error::MissingColumnInIndices(ref col_name) => {
                 write!(f, "Missing column in indices {}", col_name)
             }
+            Error::MissingColumnInSchema(ref schema, ref col_name) => {
+                write!(f, "Missing column {} in schema {:?}", col_name, schema)
+            }
             Error::OrderByWithNoSortColumns => {
                 write!(f, "Order by called without any sort columns")
             }
-            Error::EmptyIndices => write!(f, "Empty pool indices"),
+            Error::WithoutSource(ref alias) => {
+                write!(f, "Aliased column expression {} has no source", alias)
+            }
             Error::Aggregate(ref error) => write!(f, "{}", error),
             Error::Block(ref error) => write!(f, "{}", error),
             Error::Pool(ref error) => write!(f, "{}", error),
@@ -91,9 +101,72 @@ impl Row {
 }
 
 #[derive(Clone, Debug, Deserialize, Hash, Serialize)]
+pub enum ColumnExpr {
+    Constant(Value),
+    Source(String),
+    Alias(String, Box<ColumnExpr>),
+    Operation(ArithmeticOp, Box<ColumnExpr>, Box<ColumnExpr>),
+}
+
+impl ColumnExpr {
+    fn name(&self) -> Option<String> {
+        match *self {
+            ColumnExpr::Source(ref col_name) |
+            ColumnExpr::Alias(ref col_name, _) => Some(col_name.clone()),
+            _ => None,
+        }
+    }
+
+    fn source_name(&self) -> Option<String> {
+        match *self {
+            ColumnExpr::Constant(_) => None,
+            ColumnExpr::Source(ref name) => Some(name.clone()),
+            ColumnExpr::Alias(_, ref child_expr) => child_expr.source_name(),
+            ColumnExpr::Operation(_, ref left, ref right) => {
+                let mut source = left.source_name();
+                if source.is_none() {
+                    source = right.source_name()
+                }
+                source
+            }
+        }
+    }
+
+    fn type_(&self, parent_schema: &Schema) -> Result<Type> {
+        match *self {
+            ColumnExpr::Constant(ref value) => Ok(value.type_()),
+            ColumnExpr::Source(ref col_name) => {
+                parent_schema.type_(col_name).ok_or_else(|| {
+                    Error::MissingColumnInSchema(parent_schema.clone(), col_name.clone())
+                })
+            }
+            ColumnExpr::Alias(_, ref expr) => expr.type_(parent_schema),
+            ColumnExpr::Operation(ref operation, ref left, ref right) => {
+                Ok(operation.type_(
+                    &left.type_(parent_schema)?,
+                    &right.type_(parent_schema)?,
+                )?)
+            }
+        }
+    }
+
+    fn source_names(column_exprs: &[ColumnExpr]) -> Vec<String> {
+        column_exprs
+            .into_iter()
+            .map(|expr| match *expr {
+                ColumnExpr::Source(ref col_name) => Some(col_name),
+                _ => None,
+            })
+            .filter(|name| name.is_some())
+            .map(|name| name.unwrap().clone())
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Hash, Serialize)]
 pub enum Operation {
     Read(Format, PathBuf),
-    Select(Vec<String>),
+    Select(Vec<ColumnExpr>),
     Filter(String, Predicate),
     OrderBy(Vec<String>),
     GroupBy(Vec<String>),
@@ -104,7 +177,13 @@ impl Operation {
     fn hash_from_seed(&self, seed: &u64, col_name: &str) -> u64 {
         let mut hasher = DefaultHasher::new();
         seed.hash(&mut hasher);
-        col_name.hash(&mut hasher);
+        if let Operation::Select(ref column_exprs) = *self {
+            let named = column_exprs
+                .into_iter()
+                .map(|expr| (expr.name().unwrap(), expr))
+                .collect::<HashMap<String, &ColumnExpr>>();
+            named[col_name].hash(&mut hasher);
+        }
         self.hash(&mut hasher);
         hasher.finish()
     }
@@ -151,20 +230,38 @@ impl DataFrame {
         }
     }
 
-    pub fn select(&self, column_names: &[&str]) -> Result<DataFrame> {
-        let operation = Operation::Select(column_names.iter().map(|s| s.to_string()).collect());
-        let pool_indices = self.pool_indices
+    pub fn select(&self, column_exprs: &[ColumnExpr]) -> Result<DataFrame> {
+        let operation = Operation::Select(column_exprs.to_vec());
+        let pool_indices = column_exprs
             .iter()
-            .filter(|&(k, _)| column_names.contains(&k.as_str()))
-            .map(|(k, v)| (k.clone(), operation.hash_from_seed(v, k)))
-            .collect();
+            .map(|expr| if let Some(col_name) = expr.name() {
+                let source_col = expr.source_name().ok_or_else(|| {
+                    Error::WithoutSource(col_name.clone())
+                })?;
+                let parent_idx = self.pool_indices.get(&source_col).ok_or_else(|| {
+                    Error::MissingColumnInIndices(col_name.clone())
+                })?;
+                let idx = operation.hash_from_seed(parent_idx, &col_name);
+                Ok((col_name, idx))
+            } else {
+                Err(Error::AliasRequired)
+            })
+            .collect::<Result<HashMap<String, u64>>>()?;
+        let schema = Schema::from_owned(column_exprs
+            .iter()
+            .map(|expr| {
+                let col_name = expr.name().unwrap();
+                let type_ = expr.type_(&self.schema)?;
+                Ok((col_name, type_))
+            })
+            .collect::<Result<Vec<(String, Type)>>>()?);
         Ok(DataFrame {
             pool_indices,
-            schema: self.schema.select(column_names),
+            schema: schema,
             parent: Some(box self.clone()),
             operation: Some(operation),
-            ordered_by: self.ordered_by.clone(),
-            grouped_by: self.grouped_by.clone(),
+            ordered_by: vec![],
+            grouped_by: vec![],
         })
     }
 
@@ -217,12 +314,10 @@ impl DataFrame {
         let columns = ordered
             .schema
             .iter()
-            .map(|column| {
-                if column_names.contains(&column.name.as_str()) {
-                    column.clone()
-                } else {
-                    Column::new(column.name.clone(), Type::List(box column.type_.clone()))
-                }
+            .map(|column| if column_names.contains(&column.name.as_str()) {
+                column.clone()
+            } else {
+                Column::new(column.name.clone(), Type::List(box column.type_.clone()))
             })
             .collect::<Vec<Column>>();
         Ok(DataFrame {
@@ -245,8 +340,8 @@ impl DataFrame {
                     overlap.iter().map(|s| s.to_string()).collect(),
                 ));
             }
-            let missing =
-                &(&HashSet::from_iter(self.schema.keys()) - &aggregate_keys) - &group_keys;
+            let missing = &(&HashSet::from_iter(self.schema.keys()) - &aggregate_keys) -
+                &group_keys;
             if !missing.is_empty() {
                 return Err(Error::MissingAggregates(
                     missing.iter().map(|s| s.to_string()).collect(),
@@ -255,16 +350,14 @@ impl DataFrame {
         }
         let columns = self.schema
             .iter()
-            .map(|column| {
-                if aggregators.contains_key(&column.name) {
-                    let aggregator = &aggregators[&column.name];
-                    Ok(Column::new(
-                        column.name.clone(),
-                        aggregator.output_type(&column.type_)?,
-                    ))
-                } else {
-                    Ok(column.clone())
-                }
+            .map(|column| if aggregators.contains_key(&column.name) {
+                let aggregator = &aggregators[&column.name];
+                Ok(Column::new(
+                    column.name.clone(),
+                    aggregator.output_type(&column.type_)?,
+                ))
+            } else {
+                Ok(column.clone())
             })
             .collect::<Result<Vec<Column>>>()?;
         let operation = Operation::Aggregation(aggregators.clone());
@@ -281,7 +374,7 @@ impl DataFrame {
     pub fn call(&self, operation: &Operation) -> Result<DataFrame> {
         Ok(match *operation {
             Operation::Read(_, _) => unimplemented!(),
-            Operation::Select(ref column_names) => self.select(&as_strs(column_names))?,
+            Operation::Select(ref column_exprs) => self.select(column_exprs)?,
             Operation::Filter(ref column_name, ref predicate) => {
                 self.filter(column_name, predicate)?
             }
@@ -299,10 +392,9 @@ impl DataFrame {
         let mut row_idx = 0;
         let mut rows = vec![];
         let pool = pool.lock().unwrap();
-        let result_size = pool.len(self.pool_indices
-            .values()
-            .nth(0)
-            .ok_or(Error::EmptyIndices)?) as u64;
+        let result_size = pool.len(
+            self.pool_indices.values().nth(0).ok_or(Error::EmptyIndices)?,
+        ) as u64;
 
         loop {
             if row_idx == result_size {
@@ -312,18 +404,21 @@ impl DataFrame {
             for column in self.schema.iter() {
                 let col_idx = self.pool_indices[&column.name];
                 let value = match (&column.type_, pool.get_value(&col_idx, &row_idx)) {
-                    (&Type::Bool, Some(value @ Value::Bool(_)))
-                    | (&Type::Int, Some(value @ Value::Int(_)))
-                    | (&Type::Float, Some(value @ Value::Float(_)))
-                    | (&Type::String, Some(value @ Value::String(_)))
-                    | (&Type::List(box Type::Bool), Some(value @ Value::BoolList(_)))
-                    | (&Type::List(box Type::Int), Some(value @ Value::IntList(_)))
-                    | (&Type::List(box Type::Float), Some(value @ Value::FloatList(_)))
-                    | (&Type::List(box Type::String), Some(value @ Value::StringList(_))) => value,
-                    (_, None) => panic!(format!(
-                        "Missing value: col => {:?}, row => {:?}",
-                        col_idx, row_idx
-                    )),
+                    (&Type::Bool, Some(value @ Value::Bool(_))) |
+                    (&Type::Int, Some(value @ Value::Int(_))) |
+                    (&Type::Float, Some(value @ Value::Float(_))) |
+                    (&Type::String, Some(value @ Value::String(_))) |
+                    (&Type::List(box Type::Bool), Some(value @ Value::BoolList(_))) |
+                    (&Type::List(box Type::Int), Some(value @ Value::IntList(_))) |
+                    (&Type::List(box Type::Float), Some(value @ Value::FloatList(_))) |
+                    (&Type::List(box Type::String), Some(value @ Value::StringList(_))) => value,
+                    (_, None) => {
+                        panic!(format!(
+                            "Missing value: col => {:?}, row => {:?}",
+                            col_idx,
+                            row_idx
+                        ))
+                    }
                     (type_, value) => panic!(format!("Type error: {:?} != {:?}", type_, value)),
                 };
                 row_values.push(value)
@@ -353,9 +448,9 @@ impl DataFrame {
     }
 
     fn should_materialize(&self, pool: &PoolRef) -> bool {
-        self.pool_indices
-            .values()
-            .any(|idx| !pool.lock().unwrap().is_column_materialized(idx))
+        self.pool_indices.values().any(|idx| {
+            !pool.lock().unwrap().is_column_materialized(idx)
+        })
     }
 
     fn materialize(&self, pool: &PoolRef) -> Result<()> {
@@ -369,7 +464,9 @@ impl DataFrame {
             for (col_name, idx) in &self.pool_indices {
                 pool.lock().unwrap().set_block(
                     *idx,
-                    Rc::from(blocks.remove(col_name).unwrap()),
+                    Rc::from(
+                        blocks.remove(col_name).unwrap(),
+                    ),
                     false,
                 )
             }
@@ -389,11 +486,20 @@ impl DataFrame {
         let mut pool = pool.lock().unwrap();
 
         match *operation {
-            Operation::Select(_) => for (col_name, idx) in &self.pool_indices {
-                let parent_idx = parent.get_idx(col_name)?;
-                let parent_entry = pool.get_entry(&parent_idx)?;
-                pool.set_block(*idx, parent_entry.block, parent_entry.sorted)
-            },
+            Operation::Select(ref column_exprs) => {
+                let named = column_exprs
+                    .into_iter()
+                    .map(|expr| (expr.name().unwrap(), expr))
+                    .collect::<HashMap<String, &ColumnExpr>>();
+                let len = match ColumnExpr::source_names(column_exprs).first() {
+                    Some(col_name) => pool.get_entry(&parent.get_idx(col_name)?)?.block.len(),
+                    None => 1,
+                };
+                for (col_name, idx) in &self.pool_indices {
+                    let entry = Self::eval_column(named[col_name], &pool, &parent.pool_indices, len)?;
+                    pool.set_block(*idx, entry.block, entry.sorted)
+                }
+            }
             Operation::Filter(ref filter_col_name, ref predicate) => {
                 let filter_col_idx = parent.get_idx(filter_col_name)?;
                 let filter_entry = pool.get_entry(&filter_col_idx)?;
@@ -428,8 +534,8 @@ impl DataFrame {
                 }
                 match sort_scores {
                     Some(_) => {
-                        let missing: HashSet<&String> = &HashSet::from_iter(self.schema.keys())
-                            - &HashSet::from_iter(col_names);
+                        let missing: HashSet<&String> = &HashSet::from_iter(self.schema.keys()) -
+                            &HashSet::from_iter(col_names);
                         for col_name in missing {
                             let idx = parent.get_idx(col_name)?;
                             let entry = pool.get_entry(&idx)?;
@@ -510,10 +616,49 @@ impl DataFrame {
             .map(|idx| *idx)
     }
 
+    fn eval_column(
+        column_expr: &ColumnExpr,
+        pool: &Pool,
+        parent_indices: &HashMap<String, u64>,
+        len: usize,
+    ) -> Result<Entry> {
+        match *column_expr {
+            ColumnExpr::Constant(ref value) => {
+                let mut builder = block::builder(&value.type_());
+                for _ in 0..len {
+                    builder.push(value.clone())?
+                }
+                Ok(Entry::new(Rc::from(builder.build()), true))
+            }
+            ColumnExpr::Source(ref col_name) => {
+                let parent_idx = parent_indices.get(col_name).ok_or_else(|| {
+                    Error::MissingColumnInIndices(col_name.clone())
+                })?;
+                let parent_entry = pool.get_entry(parent_idx)?;
+                Ok(parent_entry)
+            }
+            ColumnExpr::Alias(_, ref child_expr) => {
+                Self::eval_column(child_expr, pool, parent_indices, len)
+            }
+            ColumnExpr::Operation(ref operation, ref left_expr, ref right_expr) => {
+                let left = Self::eval_column(left_expr, pool, parent_indices, len)?;
+                let right = Self::eval_column(right_expr, pool, parent_indices, len)?;
+                Ok(Entry::new(
+                    Rc::from(
+                        left.block.combine(right.block.as_ref(), operation)?,
+                    ),
+                    false,
+                ))
+            }
+        }
+    }
+
     fn new_indices(operation: &Operation, indices: &HashMap<String, u64>) -> HashMap<String, u64> {
         indices
             .iter()
-            .map(|(col_name, idx)| (col_name.clone(), operation.hash_from_seed(idx, col_name)))
+            .map(|(col_name, idx)| {
+                (col_name.clone(), operation.hash_from_seed(idx, col_name))
+            })
             .collect()
     }
 }

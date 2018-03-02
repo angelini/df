@@ -3,6 +3,8 @@
 
 extern crate csv;
 extern crate decorum;
+#[macro_use]
+extern crate downcast_rs;
 extern crate fnv;
 extern crate futures;
 extern crate hyper;
@@ -27,6 +29,39 @@ pub mod pool;
 pub mod reader;
 pub mod schema;
 pub mod value;
+
+#[macro_export]
+macro_rules! col {
+    ( $source:expr ) => {
+        $crate::dataframe::ColumnExpr::Source($source.to_string())
+    };
+    (const $value:expr ) => {
+        $crate::dataframe::ColumnExpr::Constant($crate::value::Value::from($value))
+    };
+    (alias $alias:expr, $source:expr ) => {
+        $crate::dataframe::ColumnExpr::Alias($alias.to_string(), Box::new(col!($source)))
+    };
+    (+ $left:expr, $right:expr) => {
+        $crate::dataframe::ColumnExpr::Operation(
+            $crate::block::ArithmeticOp::Add, Box::new(col!($left)), Box::new(col!($right))
+        )
+    };
+    (- $left:expr, $right:expr) => {
+        $crate::dataframe::ColumnExpr::Operation(
+            $crate::block::ArithmeticOp::Subtract, Box::new(col!($left)), Box::new(col!($right))
+        )
+    };
+    (* $left:expr, $right:expr) => {
+        $crate::dataframe::ColumnExpr::Operation(
+            $crate::block::ArithmeticOp::Multiply, col!($left), col!($right)
+        )
+    };
+    (/ $left:expr, $right:expr) => {
+        $crate::dataframe::ColumnExpr::Operation(
+            $crate::block::ArithmeticOp::Divide, col!($left), col!($right)
+        )
+    };
+}
 
 #[macro_export]
 macro_rules! agg {
