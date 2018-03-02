@@ -30,10 +30,10 @@ Then you can interact with the server using the Df class
 ```python
 schema = Schema([('int', Type.INT),
                  ('string', Type.STRING),
-                 ('boolean', Type.BOOLEAN)])
+                 ('bool', Type.BOOL)])
 
 df = Df.from_csv('data/small.csv', schema) \
-       .filter('boolean', Predicate(Comparator.EQUAL, Value(True))) \
+       .filter('bool', Predicate(Comparator.EQUAL, Value(True))) \
        .select(['int']) \
        .aggregate({'int': Aggregator.AVERAGE})
 

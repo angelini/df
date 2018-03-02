@@ -47,11 +47,11 @@ type SortScores = fnv::FnvHashMap<usize, usize>;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum AnyBlock {
-    Boolean(Vec<bool>),
+    Bool(Vec<bool>),
     Int(Vec<i64>),
     Float(Vec<f64>),
     String(Vec<String>),
-    BooleanList(Vec<Vec<bool>>),
+    BoolList(Vec<Vec<bool>>),
     IntList(Vec<Vec<i64>>),
     FloatList(Vec<Vec<f64>>),
     StringList(Vec<Vec<String>>),
@@ -60,11 +60,11 @@ pub enum AnyBlock {
 impl AnyBlock {
     pub fn into_block(self) -> Box<Block> {
         match self {
-            AnyBlock::Boolean(values) => box BooleanBlock::new(values),
+            AnyBlock::Bool(values) => box BoolBlock::new(values),
             AnyBlock::Int(values) => box IntBlock::new(values),
             AnyBlock::Float(values) => box FloatBlock::new(values),
             AnyBlock::String(values) => box StringBlock::new(values),
-            AnyBlock::BooleanList(values) => box ListBlock::Boolean(values),
+            AnyBlock::BoolList(values) => box ListBlock::Bool(values),
             AnyBlock::IntList(values) => box ListBlock::Int(values),
             AnyBlock::FloatList(values) => box ListBlock::Float(values),
             AnyBlock::StringList(values) => box ListBlock::String(values),
@@ -85,11 +85,11 @@ macro_rules! from_anyblock {
 }
 
 from_anyblock!(
-    [Boolean, Vec<bool>],
+    [Bool, Vec<bool>],
     [Int, Vec<i64>],
     [Float, Vec<f64>],
     [String, Vec<String>],
-    [BooleanList, Vec<Vec<bool>>],
+    [BoolList, Vec<Vec<bool>>],
     [IntList, Vec<Vec<i64>>],
     [FloatList, Vec<Vec<f64>>],
     [StringList, Vec<Vec<String>>]
@@ -231,7 +231,7 @@ fn gen_group_by<T: Clone>(values: &[T], group_offsets: &[usize]) -> Vec<Vec<T>> 
 
 #[derive(Clone, Debug)]
 enum ListBlock {
-    Boolean(Vec<Vec<bool>>),
+    Bool(Vec<Vec<bool>>),
     Int(Vec<Vec<i64>>),
     Float(Vec<Vec<f64>>),
     String(Vec<Vec<String>>),
@@ -240,9 +240,9 @@ enum ListBlock {
 impl ListBlock {
     fn average(&self) -> Result<Box<Block>> {
         match *self {
-            ListBlock::Boolean(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
+            ListBlock::Bool(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
                 Aggregator::Average,
-                Type::Boolean,
+                Type::Bool,
             ))),
             ListBlock::Int(ref values) => Ok(box FloatBlock::new(
                 values
@@ -265,7 +265,7 @@ impl ListBlock {
 
     fn count(&self) -> Result<Box<Block>> {
         match *self {
-            ListBlock::Boolean(ref values) => Ok(box IntBlock::new(
+            ListBlock::Bool(ref values) => Ok(box IntBlock::new(
                 values.iter().map(|vs| vs.len() as i64).collect(),
             )),
             ListBlock::Int(ref values) => Ok(box IntBlock::new(
@@ -282,9 +282,9 @@ impl ListBlock {
 
     fn sum(&self) -> Result<Box<Block>> {
         match *self {
-            ListBlock::Boolean(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
+            ListBlock::Bool(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
                 Aggregator::Sum,
-                Type::Boolean,
+                Type::Bool,
             ))),
             ListBlock::Int(ref values) => Ok(box IntBlock::new(
                 values.iter().map(|vs| vs.iter().sum()).collect(),
@@ -303,7 +303,7 @@ impl ListBlock {
 macro_rules! simple_list_aggregate {
     ($block:expr, $fn:expr) => {{
         match *$block {
-            ListBlock::Boolean(ref values) => Ok(box BooleanBlock::new(values
+            ListBlock::Bool(ref values) => Ok(box BoolBlock::new(values
                 .iter()
                 .map(|vs| $fn(vs))
                 .collect::<aggregate::Result<Vec<bool>>>()?)),
@@ -326,7 +326,7 @@ macro_rules! simple_list_aggregate {
 impl Block for ListBlock {
     fn type_(&self) -> Type {
         match *self {
-            ListBlock::Boolean(_) => Type::List(box Type::Boolean),
+            ListBlock::Bool(_) => Type::List(box Type::Bool),
             ListBlock::Int(_) => Type::List(box Type::Int),
             ListBlock::Float(_) => Type::List(box Type::Float),
             ListBlock::String(_) => Type::List(box Type::String),
@@ -335,7 +335,7 @@ impl Block for ListBlock {
 
     fn len(&self) -> usize {
         match *self {
-            ListBlock::Boolean(ref values) => values.len(),
+            ListBlock::Bool(ref values) => values.len(),
             ListBlock::Int(ref values) => values.len(),
             ListBlock::Float(ref values) => values.len(),
             ListBlock::String(ref values) => values.len(),
@@ -344,7 +344,7 @@ impl Block for ListBlock {
 
     fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
         match *self {
-            ListBlock::Boolean(ref values) => values[left] == values[right],
+            ListBlock::Bool(ref values) => values[left] == values[right],
             ListBlock::Int(ref values) => values[left] == values[right],
             ListBlock::Float(ref values) => values[left] == values[right],
             ListBlock::String(ref values) => values[left] == values[right],
@@ -353,8 +353,8 @@ impl Block for ListBlock {
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
         match *self {
-            ListBlock::Boolean(ref values) => {
-                box ListBlock::Boolean(gen_select_by_idx(values, indices))
+            ListBlock::Bool(ref values) => {
+                box ListBlock::Bool(gen_select_by_idx(values, indices))
             }
             ListBlock::Int(ref values) => box ListBlock::Int(gen_select_by_idx(values, indices)),
             ListBlock::Float(ref values) => {
@@ -368,7 +368,7 @@ impl Block for ListBlock {
 
     fn get(&self, idx: usize) -> Value {
         match *self {
-            ListBlock::Boolean(ref values) => Value::from(values[idx].clone()),
+            ListBlock::Bool(ref values) => Value::from(values[idx].clone()),
             ListBlock::Int(ref values) => Value::from(values[idx].clone()),
             ListBlock::Float(ref values) => Value::from(values[idx].clone()),
             ListBlock::String(ref values) => Value::from(values[idx].clone()),
@@ -404,7 +404,7 @@ impl Block for ListBlock {
 
     fn into_any_block(&self) -> AnyBlock {
         match *self {
-            ListBlock::Boolean(ref values) => AnyBlock::BooleanList(values.clone()),
+            ListBlock::Bool(ref values) => AnyBlock::BoolList(values.clone()),
             ListBlock::Int(ref values) => AnyBlock::IntList(values.clone()),
             ListBlock::Float(ref values) => AnyBlock::FloatList(values.clone()),
             ListBlock::String(ref values) => AnyBlock::StringList(values.clone()),
@@ -413,17 +413,17 @@ impl Block for ListBlock {
 }
 
 #[derive(Clone, Debug)]
-struct BooleanBlock {
+struct BoolBlock {
     values: Vec<bool>,
 }
 
-impl BooleanBlock {
+impl BoolBlock {
     fn new(values: Vec<bool>) -> Self {
-        BooleanBlock { values }
+        BoolBlock { values }
     }
 }
 
-impl Block for BooleanBlock {
+impl Block for BoolBlock {
     fn type_(&self) -> Type {
         Type::Int
     }
@@ -437,7 +437,7 @@ impl Block for BooleanBlock {
     }
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
-        box BooleanBlock::new(gen_select_by_idx(&self.values, indices))
+        box BoolBlock::new(gen_select_by_idx(&self.values, indices))
     }
 
     fn get(&self, idx: usize) -> Value {
@@ -445,9 +445,9 @@ impl Block for BooleanBlock {
     }
 
     fn filter(&self, predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
-        if let Value::Boolean(ref value) = predicate.value {
+        if let Value::Bool(ref value) = predicate.value {
             let (indices, filtered) = gen_filter(&predicate.comparator, &self.values, value);
-            Ok((indices, box BooleanBlock::new(filtered)))
+            Ok((indices, box BoolBlock::new(filtered)))
         } else {
             Err(Error::PredicateAndValueTypes(
                 predicate.value.type_(),
@@ -462,21 +462,21 @@ impl Block for BooleanBlock {
         only_use_scores: bool,
     ) -> (SortScores, Box<Block>) {
         let (indices, ordered) = gen_order_by(&self.values, sort_scores, only_use_scores);
-        (indices, box BooleanBlock::new(ordered))
+        (indices, box BoolBlock::new(ordered))
     }
 
     fn group_by(&self, group_offsets: &[usize]) -> Box<Block> {
-        box ListBlock::Boolean(gen_group_by(&self.values, group_offsets))
+        box ListBlock::Bool(gen_group_by(&self.values, group_offsets))
     }
 
     fn aggregate(&self, aggregator: &Aggregator) -> Result<Box<Block>> {
         match *aggregator {
             Aggregator::Count => Ok(box IntBlock::new(vec![self.len() as i64])),
-            Aggregator::First => Ok(box BooleanBlock::new(vec![
+            Aggregator::First => Ok(box BoolBlock::new(vec![
                 Aggregator::first(&self.values)?,
             ])),
-            Aggregator::Max => Ok(box BooleanBlock::new(vec![Aggregator::max(&self.values)?])),
-            Aggregator::Min => Ok(box BooleanBlock::new(vec![Aggregator::min(&self.values)?])),
+            Aggregator::Max => Ok(box BoolBlock::new(vec![Aggregator::max(&self.values)?])),
+            Aggregator::Min => Ok(box BoolBlock::new(vec![Aggregator::min(&self.values)?])),
             Aggregator::Average | Aggregator::Sum => Err(Error::from(
                 aggregate::Error::AggregatorAndColumnType(aggregator.clone(), self.type_()),
             )),
@@ -484,27 +484,27 @@ impl Block for BooleanBlock {
     }
 
     fn into_any_block(&self) -> AnyBlock {
-        AnyBlock::Boolean(self.values.clone())
+        AnyBlock::Bool(self.values.clone())
     }
 }
 
 #[derive(Debug, Default)]
-struct BooleanBlockBuilder {
+struct BoolBlockBuilder {
     values: Vec<bool>,
 }
 
-impl BlockBuilder for BooleanBlockBuilder {
+impl BlockBuilder for BoolBlockBuilder {
     fn push(&mut self, value: Value) -> Result<()> {
         match value {
-            Value::Boolean(v) => self.values.push(v),
-            _ => return Err(Error::PushType(Type::Boolean, value)),
+            Value::Bool(v) => self.values.push(v),
+            _ => return Err(Error::PushType(Type::Bool, value)),
         }
         Ok(())
     }
 
     #[allow(boxed_local)]
     fn build(self: Box<Self>) -> Box<Block> {
-        box BooleanBlock::new(self.values)
+        box BoolBlock::new(self.values)
     }
 }
 
@@ -891,7 +891,7 @@ pub fn builders(types: &[&Type]) -> Vec<Box<BlockBuilder>> {
     let mut builders: Vec<Box<BlockBuilder>> = vec![];
     for type_ in types.iter() {
         match **type_ {
-            Type::Boolean => builders.push(box BooleanBlockBuilder::default()),
+            Type::Bool => builders.push(box BoolBlockBuilder::default()),
             Type::Int => builders.push(box IntBlockBuilder::default()),
             Type::Float => builders.push(box FloatBlockBuilder::default()),
             Type::String => builders.push(box StringBlockBuilder::default()),

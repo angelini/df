@@ -5,14 +5,14 @@ URI = 'http://127.0.0.1:3000/call'
 
 
 class Type(enum.Enum):
-    BOOLEAN = 1
+    BOOL = 1
     INT = 2
     FLOAT = 3
     STRING = 4
 
     def serialize(self):
         to_s = {
-            Type.BOOLEAN: 'Boolean',
+            Type.BOOL: 'Bool',
             Type.INT: 'Int',
             Type.FLOAT: 'Float',
             Type.STRING: 'String'
@@ -56,7 +56,7 @@ class Value:
 
     def serialize(self):
         to_s = {
-            bool: 'Boolean',
+            bool: 'Bool',
             int: 'Int',
             float: 'Float',
             str: 'String',
@@ -145,9 +145,9 @@ class Df:
 def example_small():
     schema = Schema([('int', Type.INT),
                      ('string', Type.STRING),
-                     ('boolean', Type.BOOLEAN)])
+                     ('bool', Type.BOOL)])
     return Df.from_csv('data/small.csv', schema) \
-             .filter('boolean', Predicate(Comparator.EQUAL, Value(True))) \
+             .filter('bool', Predicate(Comparator.EQUAL, Value(True))) \
              .select(['int']) \
              .aggregate({'int': Aggregator.AVERAGE}) \
              .collect()

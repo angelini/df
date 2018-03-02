@@ -312,11 +312,11 @@ impl DataFrame {
             for column in self.schema.iter() {
                 let col_idx = self.pool_indices[&column.name];
                 let value = match (&column.type_, pool.get_value(&col_idx, &row_idx)) {
-                    (&Type::Boolean, Some(value @ Value::Boolean(_)))
+                    (&Type::Bool, Some(value @ Value::Bool(_)))
                     | (&Type::Int, Some(value @ Value::Int(_)))
                     | (&Type::Float, Some(value @ Value::Float(_)))
                     | (&Type::String, Some(value @ Value::String(_)))
-                    | (&Type::List(box Type::Boolean), Some(value @ Value::BooleanList(_)))
+                    | (&Type::List(box Type::Bool), Some(value @ Value::BoolList(_)))
                     | (&Type::List(box Type::Int), Some(value @ Value::IntList(_)))
                     | (&Type::List(box Type::Float), Some(value @ Value::FloatList(_)))
                     | (&Type::List(box Type::String), Some(value @ Value::StringList(_))) => value,

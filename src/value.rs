@@ -12,7 +12,7 @@ pub enum Error {
 
 impl From<str::ParseBoolError> for Error {
     fn from(error: str::ParseBoolError) -> Error {
-        Error::Parse(Type::Boolean, format!("{:?}", error))
+        Error::Parse(Type::Bool, format!("{:?}", error))
     }
 }
 
@@ -82,7 +82,7 @@ impl<'a> Nullable for &'a str {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum Type {
-    Boolean,
+    Bool,
     Int,
     Float,
     String,
@@ -91,11 +91,11 @@ pub enum Type {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Value {
-    Boolean(bool),
+    Bool(bool),
     Int(i64),
     Float(R64),
     String(String),
-    BooleanList(Vec<bool>),
+    BoolList(Vec<bool>),
     IntList(Vec<i64>),
     FloatList(Vec<R64>),
     StringList(Vec<String>),
@@ -116,7 +116,7 @@ macro_rules! value_type {
 impl Value {
     pub fn parse(type_: &Type, value: &str) -> Result<Value> {
         match *type_ {
-            Type::Boolean => Ok(Value::from(value.parse::<bool>()?)),
+            Type::Bool => Ok(Value::from(value.parse::<bool>()?)),
             Type::Int => Ok(Value::from(value.parse::<i64>()?)),
             Type::Float => Ok(Value::from(value.parse::<f64>()?)),
             Type::String => Ok(Value::from(value.to_string())),
@@ -127,8 +127,8 @@ impl Value {
     pub fn type_(&self) -> Type {
         value_type!(
             self,
-            Boolean,
-            BooleanList,
+            Bool,
+            BoolList,
             Int,
             IntList,
             Float,
@@ -141,7 +141,7 @@ impl Value {
 
 impl From<bool> for Value {
     fn from(value: bool) -> Self {
-        Value::Boolean(value)
+        Value::Bool(value)
     }
 }
 
@@ -177,7 +177,7 @@ impl<'a> From<&'a str> for Value {
 
 impl From<Vec<bool>> for Value {
     fn from(value: Vec<bool>) -> Self {
-        Value::BooleanList(value)
+        Value::BoolList(value)
     }
 }
 

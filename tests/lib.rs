@@ -50,7 +50,7 @@ fn test_no_transforms() {
     let pool = Pool::new_ref();
     let df = from_vecs!(
         &pool,
-        ["bool", Type::Boolean, vec![true, false, true]],
+        ["bool", Type::Bool, vec![true, false, true]],
         ["int", Type::Int, vec![1, 2, 3]]
     );
     assert_df_eq!(&pool, df, (true, 1), (false, 2), (true, 3));
@@ -61,7 +61,7 @@ fn test_select() {
     let pool = Pool::new_ref();
     let df = from_vecs!(
         &pool,
-        ["bool", Type::Boolean, vec![true, false, true]],
+        ["bool", Type::Bool, vec![true, false, true]],
         ["int", Type::Int, vec![1, 2, 3]]
     );
     let output = df.select(&["int"]);
@@ -73,7 +73,7 @@ fn test_filter_int_eq() {
     let pool = Pool::new_ref();
     let df = from_vecs!(
         &pool,
-        ["bool", Type::Boolean, vec![true, false, true]],
+        ["bool", Type::Bool, vec![true, false, true]],
         ["int", Type::Int, vec![1, 2, 3]]
     );
     let output = df.filter("int", &predicate!(== 2));
@@ -85,7 +85,7 @@ fn test_filter_string_eq() {
     let pool = Pool::new_ref();
     let df = from_vecs!(
         &pool,
-        ["bool", Type::Boolean, vec![true, false, true]],
+        ["bool", Type::Bool, vec![true, false, true]],
         ["string", Type::String, vec!["foo", "bar", "baz"]]
     );
     let output = df.filter("string", &predicate!(== "baz"));
@@ -97,7 +97,7 @@ fn test_filter_select() {
     let pool = Pool::new_ref();
     let df = from_vecs!(
         &pool,
-        ["bool", Type::Boolean, vec![true, false, true]],
+        ["bool", Type::Bool, vec![true, false, true]],
         ["int", Type::Int, vec![1, 2, 3]]
     );
     let output = || df.filter("int", &predicate!(== 2))?.select(&["bool"]);
@@ -163,7 +163,7 @@ fn test_group_by() {
     let df = from_vecs!(
         &pool,
         ["int", Type::Int, vec![3, 2, 1, 2]],
-        ["bool", Type::Boolean, vec![true, false, true, true]]
+        ["bool", Type::Bool, vec![true, false, true, true]]
     );
     let output = df.group_by(&["int"]);
     assert_df_eq!(
@@ -200,7 +200,7 @@ fn test_group_by_multiple_columns() {
         &pool,
         ["1_int", Type::Int, vec![3, 2, 1, 2, 2]],
         ["2_int", Type::Int, vec![4, 3, 2, 1, 3]],
-        ["bool", Type::Boolean, vec![true, false, true, false, true]]
+        ["bool", Type::Bool, vec![true, false, true, false, true]]
     );
     let output = df.group_by(&["1_int", "2_int"]);
     assert_df_eq!(
@@ -218,7 +218,7 @@ fn test_group_agg() {
     let pool = Pool::new_ref();
     let df = from_vecs!(
         &pool,
-        ["bool", Type::Boolean, vec![true, false, true]],
+        ["bool", Type::Bool, vec![true, false, true]],
         ["int", Type::Int, vec![1, 2, 3]]
     );
     let output = || {
@@ -306,7 +306,7 @@ fn test_read_csv() {
     );
     let pool = Pool::new_ref();
     let schema = Schema::new(&[
-        ("bool", Type::Boolean),
+        ("bool", Type::Bool),
         ("int", Type::Int),
         ("float", Type::Float),
         ("string", Type::String),
