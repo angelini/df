@@ -66,8 +66,6 @@ fn test_select() {
         ["int", Type::Int, vec![1, 2, 3]]
     );
     let output = df.select(&[col!("int")]);
-    // println!("serde_json::to_string(&output): {:?}", serde_json::to_string(&df.select(&[col!(alias "foo", "int")]).unwrap()));
-    // assert_eq!(1, 2);
     assert_df_eq!(&pool, check(output), (1), (2), (3));
 }
 

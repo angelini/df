@@ -61,7 +61,11 @@ class Value:
             float: 'Float',
             str: 'String',
         }
-        return {to_s[type(self.val)]: self.val}
+        if isinstance(self.val, float):
+            val = {'value': self.val, 'phantom': None}
+        else:
+            val = self.val
+        return {to_s[type(self.val)]: val}
 
 
 class Predicate:
@@ -274,21 +278,21 @@ def example_line_items(full=False):
     path = 'data/line_items{}.csv'.format('_full' if full else '')
     return Df.from_csv(path, schema) \
              .filter('ship_date', Predicate(Comparator.LESS_THAN_OR_EQ, Value('1998-12-01'))) \
-             .group_by(['return_flag', 'line_status']) \
-             .order_by(['return_flag', 'line_status']) \
              .select([
                  'return_flag',
                  'line_status',
                  ('sum_qty', 'quantity'),
                  ('sum_base_price', 'extended_price'),
-                 ('sum_disc_price', (ArithmeticOp.MULTIPLY, 'extended_price', (ArithmeticOp.SUBTRACT, Value(1), 'discount'))),
+                 ('sum_disc_price', (ArithmeticOp.MULTIPLY, 'extended_price', (ArithmeticOp.SUBTRACT, Value(1.0), 'discount'))),
                  ('sum_charge', (ArithmeticOp.MULTIPLY, 'extended_price',
-                                 (ArithmeticOp.MULTIPLY, (ArithmeticOp.SUBTRACT, Value(1), 'discount'), (ArithmeticOp.ADD, Value(1), 'tax')))),
+                                 (ArithmeticOp.MULTIPLY, (ArithmeticOp.SUBTRACT, Value(1.0), 'discount'), (ArithmeticOp.ADD, Value(1.0), 'tax')))),
                  ('avg_qty', 'quantity'),
                  ('avg_price', 'extended_price'),
                  ('avg_disc', 'discount'),
                  ('count_order', 'order_key'),
              ]) \
+             .group_by(['return_flag', 'line_status']) \
+             .order_by(['return_flag', 'line_status']) \
              .aggregate({'sum_qty': Aggregator.SUM,
                          'sum_base_price': Aggregator.SUM,
                          'sum_disc_price': Aggregator.SUM,
