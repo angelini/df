@@ -30,7 +30,7 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn new(block: Rc<Block>, sorted: bool) -> Entry {
+    pub fn new(block: Rc<Block>, sorted: bool) -> Entry {
         Entry { block, sorted }
     }
 }

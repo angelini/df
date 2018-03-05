@@ -22,10 +22,17 @@ impl Schema {
         Schema {
             columns: columns
                 .into_iter()
-                .map(|&(name, ref type_)| {
-                    Column::new(name.to_string(), type_.clone())
-                })
+                .map(|&(name, ref type_)| Column::new(name.to_string(), type_.clone()))
                 .collect(),
+        }
+    }
+
+    pub fn from_owned(columns: Vec<(String, Type)>) -> Schema {
+        Schema {
+            columns: columns
+                .into_iter()
+                .map(|(name, type_)| Column::new(name, type_))
+                .collect()
         }
     }
 
