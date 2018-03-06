@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use rand::{self, Rng};
 
-use block::{Block};
+use block::Block;
 use value::Value;
 
 #[derive(Debug)]
@@ -25,12 +24,12 @@ type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
-    pub block: Rc<Block>,
+    pub block: Arc<Block>,
     pub sorted: bool,
 }
 
 impl Entry {
-    pub fn new(block: Rc<Block>, sorted: bool) -> Entry {
+    pub fn new(block: Arc<Block>, sorted: bool) -> Entry {
         Entry { block, sorted }
     }
 }
@@ -74,13 +73,13 @@ impl Pool {
         self.entries.get(col_idx).map(|entry| entry.block.get(*row_idx as usize))
     }
 
-    pub fn set_block(&mut self, idx: u64, block: Rc<Block>, sorted: bool) {
+    pub fn set_block(&mut self, idx: u64, block: Arc<Block>, sorted: bool) {
         self.entries.insert(idx, Entry::new(block, sorted));
     }
 
     pub fn set_initial_block(&mut self, block: Box<Block>) -> u64 {
         let idx = self.unused_idx();
-        self.entries.insert(idx, Entry::new(Rc::from(block), false));
+        self.entries.insert(idx, Entry::new(Arc::from(block), false));
         idx
     }
 

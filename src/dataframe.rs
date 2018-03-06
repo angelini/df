@@ -4,13 +4,14 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::result;
+use std::sync::Arc;
 
-use fnv::FnvHashMap;
+use futures::future::{self, Future};
+use futures_cpupool::CpuPool;
 
 use aggregate::{self, Aggregator};
-use block::{self, AnyBlock, ArithmeticOp, Block};
+use block::{self, AnyBlock, ArithmeticOp, Block, SortScores};
 use pool::{self, Entry, Pool, PoolRef};
 use reader::{self, Format};
 use schema::{Column, Schema};
@@ -193,6 +194,29 @@ fn as_strs(strings: &[String]) -> Vec<&str> {
     strings.iter().map(|s| s.as_str()).collect()
 }
 
+fn order_by_future(
+    idx: u64,
+    block: Arc<Block>,
+    sort_scores: Arc<Option<SortScores>>,
+) -> Box<Future<Item = (u64, Box<Block>), Error = ()> + Send> {
+    Box::new(future::lazy(move || {
+        future::ok((idx, block.order_by(sort_scores.as_ref(), true).1))
+    }))
+}
+
+type FilteredBlock = (u64, bool, Box<Block>);
+
+fn filter_future(
+    idx: u64,
+    block: Arc<Block>,
+    pass_indices: Arc<Vec<usize>>,
+    sorted: bool,
+) -> Box<Future<Item = FilteredBlock, Error = ()> + Send> {
+    Box::new(future::lazy(move || {
+        future::ok((idx, sorted, block.select_by_idx(pass_indices.as_ref())))
+    }))
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DataFrame {
     pub schema: Schema,
@@ -235,9 +259,9 @@ impl DataFrame {
         let pool_indices = column_exprs
             .iter()
             .map(|expr| if let Some(col_name) = expr.name() {
-                let source_col = expr.source_name().ok_or_else(|| {
-                    Error::WithoutSource(col_name.clone())
-                })?;
+                let source_col = expr.source_name().ok_or_else(
+                    || Error::WithoutSource(col_name.clone()),
+                )?;
                 let parent_idx = self.pool_indices.get(&source_col).ok_or_else(|| {
                     Error::MissingColumnInIndices(col_name.clone())
                 })?;
@@ -464,7 +488,7 @@ impl DataFrame {
             for (col_name, idx) in &self.pool_indices {
                 pool.lock().unwrap().set_block(
                     *idx,
-                    Rc::from(
+                    Arc::from(
                         blocks.remove(col_name).unwrap(),
                     ),
                     false,
@@ -496,59 +520,81 @@ impl DataFrame {
                     None => 1,
                 };
                 for (col_name, idx) in &self.pool_indices {
-                    let entry = Self::eval_column(named[col_name], &pool, &parent.pool_indices, len)?;
+                    let entry =
+                        Self::eval_column(named[col_name], &pool, &parent.pool_indices, len)?;
                     pool.set_block(*idx, entry.block, entry.sorted)
                 }
             }
             Operation::Filter(ref filter_col_name, ref predicate) => {
                 let filter_col_idx = parent.get_idx(filter_col_name)?;
                 let filter_entry = pool.get_entry(&filter_col_idx)?;
-                let (filter_pass_idxs, filtered_block) = filter_entry.block.filter(predicate)?;
+                let (pass_indices, filtered_block) = filter_entry.block.filter(predicate)?;
                 pool.set_block(
                     operation.hash_from_seed(&filter_col_idx, filter_col_name),
-                    Rc::from(filtered_block),
+                    Arc::from(filtered_block),
                     filter_entry.sorted,
                 );
 
+                let cpu_pool = CpuPool::new_num_cpus();
+                let pass_indices_arc = Arc::new(pass_indices);
+                let mut futures = vec![];
                 for (col_name, idx) in &parent.pool_indices {
                     if col_name != filter_col_name {
-                        let new_idx = operation.hash_from_seed(idx, col_name);
                         let entry = pool.get_entry(idx)?;
-                        let block = entry.block.select_by_idx(&filter_pass_idxs);
-                        pool.set_block(new_idx, Rc::from(block), entry.sorted)
+                        futures.push(cpu_pool.spawn(filter_future(
+                            operation.hash_from_seed(idx, col_name),
+                            entry.block,
+                            pass_indices_arc.clone(),
+                            entry.sorted
+                        )));
                     }
                 }
+                future::join_all(futures)
+                    .map(|blocks| for (idx, sorted, block) in blocks {
+                        pool.set_block(idx, Arc::from(block), sorted)
+                    })
+                    .wait()
+                    .unwrap();
             }
             Operation::OrderBy(ref col_names) => {
-                let mut sort_scores: Option<FnvHashMap<usize, usize>> = None;
+                let mut sort_scores: Option<SortScores> = None;
                 for col_name in col_names {
                     let col_idx = parent.get_idx(col_name)?;
                     let entry = pool.get_entry(&col_idx)?;
                     let (sort_indices, block) = entry.block.order_by(&sort_scores, false);
                     pool.set_block(
                         operation.hash_from_seed(&col_idx, col_name),
-                        Rc::from(block),
+                        Arc::from(block),
                         sort_scores.is_none(),
                     );
                     sort_scores = Some(sort_indices);
                 }
+
+                let cpu_pool = CpuPool::new_num_cpus();
+                let mut futures = vec![];
                 match sort_scores {
-                    Some(_) => {
+                    Some(sort_scores) => {
+                        let sort_scores_arc = Arc::new(Some(sort_scores));
                         let missing: HashSet<&String> = &HashSet::from_iter(self.schema.keys()) -
                             &HashSet::from_iter(col_names);
                         for col_name in missing {
                             let idx = parent.get_idx(col_name)?;
                             let entry = pool.get_entry(&idx)?;
-                            let (_, block) = entry.block.order_by(&sort_scores, true);
-                            pool.set_block(
+                            futures.push(cpu_pool.spawn(order_by_future(
                                 operation.hash_from_seed(&idx, col_name),
-                                Rc::from(block),
-                                false,
-                            );
+                                entry.block,
+                                sort_scores_arc.clone(),
+                            )));
                         }
                     }
                     None => return Err(Error::OrderByWithNoSortColumns),
                 }
+                future::join_all(futures)
+                    .map(|blocks| for (idx, block) in blocks {
+                        pool.set_block(idx, Arc::from(block), false)
+                    })
+                    .wait()
+                    .unwrap();
             }
             Operation::GroupBy(ref col_names) => {
                 let mut len = 0;
@@ -579,13 +625,13 @@ impl DataFrame {
                     if col_names.contains(col_name) {
                         pool.set_block(
                             idx,
-                            Rc::from(parent_entry.block.select_by_idx(&group_offsets)),
+                            Arc::from(parent_entry.block.select_by_idx(&group_offsets)),
                             parent_entry.sorted,
                         );
                     } else {
                         pool.set_block(
                             idx,
-                            Rc::from(parent_entry.block.group_by(&group_offsets)),
+                            Arc::from(parent_entry.block.group_by(&group_offsets)),
                             false,
                         );
                     }
@@ -597,7 +643,11 @@ impl DataFrame {
                     let entry = pool.get_entry(idx)?;
                     if aggregators.contains_key(col_name) {
                         let aggregator = &aggregators[col_name];
-                        pool.set_block(new_idx, Rc::from(entry.block.aggregate(aggregator)?), false)
+                        pool.set_block(
+                            new_idx,
+                            Arc::from(entry.block.aggregate(aggregator)?),
+                            false,
+                        )
                     } else {
                         pool.set_block(new_idx, entry.block, entry.sorted)
                     }
@@ -628,7 +678,7 @@ impl DataFrame {
                 for _ in 0..len {
                     builder.push(value.clone())?
                 }
-                Ok(Entry::new(Rc::from(builder.build()), true))
+                Ok(Entry::new(Arc::from(builder.build()), true))
             }
             ColumnExpr::Source(ref col_name) => {
                 let parent_idx = parent_indices.get(col_name).ok_or_else(|| {
@@ -644,7 +694,7 @@ impl DataFrame {
                 let left = Self::eval_column(left_expr, pool, parent_indices, len)?;
                 let right = Self::eval_column(right_expr, pool, parent_indices, len)?;
                 Ok(Entry::new(
-                    Rc::from(
+                    Arc::from(
                         left.block.combine(right.block.as_ref(), operation)?,
                     ),
                     false,

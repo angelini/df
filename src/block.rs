@@ -5,8 +5,8 @@ use std::mem;
 use std::result;
 use std::str;
 
-use fnv;
 use downcast_rs::Downcast;
+use fnv;
 
 use aggregate::{self, Aggregator};
 use value::{Comparator, Nullable, Predicate, Type, Value};
@@ -107,7 +107,7 @@ impl ArithmeticOp {
     }
 }
 
-type SortScores = fnv::FnvHashMap<usize, usize>;
+pub type SortScores = fnv::FnvHashMap<usize, usize>;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum AnyBlock {
@@ -165,7 +165,7 @@ impl<'a> From<Vec<&'a str>> for AnyBlock {
     }
 }
 
-pub trait Block: fmt::Debug + Downcast {
+pub trait Block: fmt::Debug + Downcast + Send + Sync {
     fn type_(&self) -> Type;
     fn len(&self) -> usize;
 
@@ -244,7 +244,7 @@ fn gen_order_by<T: Clone + Nullable + PartialOrd>(
                 .collect::<Vec<(usize, usize, &T)>>();
             buffer.sort_by(|&(_, left_score, left_value),
              &(_, right_score, right_value)| {
-                if left_score == right_score && !only_use_score {
+                if !only_use_score && left_score == right_score {
                     nullable_partial_cmp(left_value, right_value)
                 } else {
                     left_score.cmp(&right_score)
@@ -265,14 +265,16 @@ fn gen_order_by<T: Clone + Nullable + PartialOrd>(
     };
 
     let mut new_scores = fnv::FnvHashMap::default();
-    let mut previous_score = 0;
-    new_scores.insert(sorted[0].0, 0);
-    for (idx, &(row_idx, value)) in sorted.iter().enumerate().skip(1) {
-        if value == sorted[idx - 1].1 {
-            new_scores.insert(row_idx, previous_score);
-        } else {
-            previous_score += 1;
-            new_scores.insert(row_idx, previous_score);
+    if !only_use_score {
+        let mut previous_score = 0;
+        new_scores.insert(sorted[0].0, 0);
+        for (idx, &(row_idx, value)) in sorted.iter().enumerate().skip(1) {
+            if value == sorted[idx - 1].1 {
+                new_scores.insert(row_idx, previous_score);
+            } else {
+                previous_score += 1;
+                new_scores.insert(row_idx, previous_score);
+            }
         }
     }
     (
