@@ -177,7 +177,25 @@ fn test_group_by() {
 }
 
 #[test]
-fn test_group_by_string() {
+fn test_group_by_string_key() {
+    let pool = Pool::new_ref();
+    let df = from_vecs!(
+        &pool,
+        ["string", Type::String, vec!["foo", "bar", "baz", "foo"]],
+        ["int", Type::Int, vec![3, 2, 1, 2]]
+    );
+    let output = df.group_by(&["string"]);
+    assert_df_eq!(
+        &pool,
+        check(output),
+        ["bar", vec![2]],
+        ["baz", vec![1]],
+        ["foo", vec![3, 2]]
+    );
+}
+
+#[test]
+fn test_group_by_string_list() {
     let pool = Pool::new_ref();
     let df = from_vecs!(
         &pool,
@@ -223,8 +241,9 @@ fn test_group_agg() {
         ["int", Type::Int, vec![1, 2, 3]]
     );
     let output = || {
-        df.group_by(&["bool"])?
-            .aggregate(&agg!("int", Aggregator::Sum))
+        df.group_by(&["bool"])?.aggregate(
+            &agg!("int", Aggregator::Sum),
+        )
     };
     assert_df_eq!(&pool, check(output()), (false, 2), (true, 4));
 }
@@ -306,12 +325,14 @@ fn test_read_csv() {
         &["true|1|1.0|hello world", "false|4|1.2|fOObAr"],
     );
     let pool = Pool::new_ref();
-    let schema = Schema::new(&[
-        ("bool", Type::Bool),
-        ("int", Type::Int),
-        ("float", Type::Float),
-        ("string", Type::String),
-    ]);
+    let schema = Schema::new(
+        &[
+            ("bool", Type::Bool),
+            ("int", Type::Int),
+            ("float", Type::Float),
+            ("string", Type::String),
+        ],
+    );
     let df = DataFrame::read(&Format::Csv, path.as_path(), &schema);
     assert_df_eq!(
         &pool,

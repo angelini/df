@@ -892,7 +892,7 @@ impl Block for StringBlock {
     }
 
     fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
-        self.values[left] == self.values[right]
+        self.get_primitive(&left) == self.get_primitive(&right)
     }
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
