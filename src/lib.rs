@@ -7,6 +7,7 @@ extern crate decorum;
 extern crate downcast_rs;
 extern crate fnv;
 extern crate futures;
+extern crate futures_cpupool;
 extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
