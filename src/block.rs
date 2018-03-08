@@ -180,6 +180,7 @@ pub trait Block: fmt::Debug + Downcast + Send + Sync {
     fn aggregate(&self, &Aggregator) -> Result<Box<Block>>;
 
     fn combine(&self, &Block, &ArithmeticOp) -> Result<Box<Block>>;
+    fn union(&mut self, &mut Block) -> Result<()>;
 
     fn into_any_block(&self) -> AnyBlock;
 
@@ -469,6 +470,10 @@ impl Block for ListBlock {
         }
     }
 
+    fn union(&mut self, _other: &mut Block) -> Result<()> {
+        unimplemented!()
+    }
+
     fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
         unimplemented!()
     }
@@ -557,6 +562,15 @@ impl Block for BoolBlock {
         }
     }
 
+    fn union(&mut self, other: &mut Block) -> Result<()> {
+        let other_type = other.type_();
+        let downcasted = other.downcast_mut::<BoolBlock>().ok_or_else(|| {
+            Error::Downcast(Type::Int, other_type)
+        })?;
+        self.values.append(&mut downcasted.values);
+        Ok(())
+    }
+
     fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
         unimplemented!()
     }
@@ -587,8 +601,7 @@ impl BlockBuilder for BoolBlockBuilder {
 }
 
 #[derive(Debug, Clone)]
-pub struct IntBlock {
-    // FIXME: pub
+struct IntBlock {
     values: Vec<i64>,
 }
 
@@ -656,6 +669,15 @@ impl Block for IntBlock {
             Aggregator::Min => Ok(box IntBlock::new(vec![Aggregator::min(&self.values)?])),
             Aggregator::Sum => Ok(box IntBlock::new(vec![self.values.iter().sum()])),
         }
+    }
+
+    fn union(&mut self, other: &mut Block) -> Result<()> {
+        let other_type = other.type_();
+        let downcasted = other.downcast_mut::<IntBlock>().ok_or_else(|| {
+            Error::Downcast(Type::Int, other_type)
+        })?;
+        self.values.append(&mut downcasted.values);
+        Ok(())
     }
 
     fn combine(&self, other: &Block, operation: &ArithmeticOp) -> Result<Box<Block>> {
@@ -785,6 +807,15 @@ impl Block for FloatBlock {
         }
     }
 
+    fn union(&mut self, other: &mut Block) -> Result<()> {
+        let other_type = other.type_();
+        let downcasted = other.downcast_mut::<FloatBlock>().ok_or_else(|| {
+            Error::Downcast(Type::Int, other_type)
+        })?;
+        self.values.append(&mut downcasted.values);
+        Ok(())
+    }
+
     fn combine(&self, other: &Block, operation: &ArithmeticOp) -> Result<Box<Block>> {
         if self.len() != other.len() {
             return Err(Error::CombineSize(self.len(), other.len()));
@@ -832,7 +863,7 @@ impl BlockBuilder for FloatBlockBuilder {
     }
 }
 
-const CHUNK_SIZE: usize = 1_000_000_000;
+const STRING_CHUNK_SIZE: usize = 1_000_000_000;
 
 #[derive(Clone, Debug)]
 struct StringBlock {
@@ -867,11 +898,12 @@ impl StringBlock {
         } else {
             let (chunk_idx, str_start) = self.indices[*idx];
             let chunk = &self.values[chunk_idx];
-            let str_end = if *idx == self.indices.len() - 1 {
-                chunk.len()
-            } else {
-                self.indices[idx + 1].1
-            };
+            let str_end =
+                if *idx != self.indices.len() - 1 && self.indices[idx + 1].0 == chunk_idx {
+                    self.indices[idx + 1].1
+                } else {
+                    chunk.len()
+                };
             Some(&chunk[str_start..str_end])
         }
     }
@@ -970,6 +1002,23 @@ impl Block for StringBlock {
         }
     }
 
+    fn union(&mut self, other: &mut Block) -> Result<()> {
+        let other_type = other.type_();
+        let downcasted = other.downcast_mut::<StringBlock>().ok_or_else(|| {
+            Error::Downcast(Type::Int, other_type)
+        })?;
+        self.values.append(&mut downcasted.values);
+        let mut incremented_indices = downcasted
+            .indices
+            .iter()
+            .map(|&(chunk_idx, str_idx)| {
+                (chunk_idx + self.indices.last().unwrap().0 + 1, str_idx)
+            })
+            .collect();
+        self.indices.append(&mut incremented_indices);
+        Ok(())
+    }
+
     fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
         unimplemented!()
     }
@@ -991,7 +1040,7 @@ impl StringBlockBuilder {
             self.values.push(String::new())
         }
         let mut current_len = self.values.last().unwrap().len();
-        if current_len + value.len() > CHUNK_SIZE {
+        if current_len + value.len() > STRING_CHUNK_SIZE {
             self.values.push(String::new());
             current_len = 0;
         }

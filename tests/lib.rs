@@ -43,6 +43,7 @@ fn write_csv(dir: &TempDir, name: &str, rows: &[&str]) -> PathBuf {
     for row in rows {
         writeln!(file, "{}", row).unwrap()
     }
+    file.flush().expect("Cannot flush csv");
     path
 }
 

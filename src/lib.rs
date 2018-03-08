@@ -1,4 +1,4 @@
-#![feature(box_syntax, box_patterns, plugin)]
+#![feature(box_syntax, box_patterns, io, plugin)]
 #![plugin(clippy)]
 
 extern crate csv;
