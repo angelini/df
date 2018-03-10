@@ -6,7 +6,6 @@ use std::result;
 use std::str;
 
 use downcast_rs::Downcast;
-use fnv;
 
 use aggregate::{self, Aggregator};
 use value::{Comparator, Nullable, Predicate, Type, Value};
@@ -107,8 +106,6 @@ impl ArithmeticOp {
     }
 }
 
-pub type SortScores = fnv::FnvHashMap<usize, usize>;
-
 #[derive(Debug, Deserialize, Serialize)]
 pub enum AnyBlock {
     Bool(Vec<bool>),
@@ -169,13 +166,13 @@ pub trait Block: fmt::Debug + Downcast + Send + Sync {
     fn type_(&self) -> Type;
     fn len(&self) -> usize;
 
-    fn equal_at_idxs(&self, usize, usize) -> bool;
+    fn cmp_at_indices(&self, usize, usize) -> cmp::Ordering;
     fn select_by_idx(&self, &[usize]) -> Box<Block>;
 
     fn get(&self, usize) -> Value;
 
     fn filter(&self, &Predicate) -> Result<(Vec<usize>, Box<Block>)>;
-    fn order_by(&self, &Option<SortScores>, bool) -> (SortScores, Box<Block>);
+    fn order_by(&self, &[usize]) -> Box<Block>;
     fn group_by(&self, &[usize]) -> Box<Block>;
     fn aggregate(&self, &Aggregator) -> Result<Box<Block>>;
 
@@ -227,61 +224,16 @@ fn nullable_partial_cmp<T: Nullable + PartialOrd>(left: &T, right: &T) -> cmp::O
     )
 }
 
-fn gen_order_by<T: Clone + Nullable + PartialOrd>(
-    values: &[T],
-    sort_scores: &Option<SortScores>,
-    only_use_score: bool,
-) -> (SortScores, Vec<T>) {
-    if values.is_empty() {
-        return (fnv::FnvHashMap::default(), vec![]);
-    }
-
-    let sorted = match *sort_scores {
-        Some(ref sort_scores) => {
-            let mut buffer = values
-                .iter()
-                .enumerate()
-                .map(|(idx, v)| (idx, sort_scores[&idx], v))
-                .collect::<Vec<(usize, usize, &T)>>();
-            buffer.sort_by(|&(_, left_score, left_value),
-             &(_, right_score, right_value)| {
-                if !only_use_score && left_score == right_score {
-                    nullable_partial_cmp(left_value, right_value)
-                } else {
-                    left_score.cmp(&right_score)
-                }
-            });
-            buffer
-                .into_iter()
-                .map(|(idx, _, value)| (idx, value))
-                .collect::<Vec<(usize, &T)>>()
-        }
-        None => {
-            let mut buffer = values.iter().enumerate().collect::<Vec<(usize, &T)>>();
-            buffer.sort_by(|&(_, left_value), &(_, right_value)| {
-                nullable_partial_cmp(left_value, right_value)
-            });
-            buffer
-        }
-    };
-
-    let mut new_scores = fnv::FnvHashMap::default();
-    if !only_use_score {
-        let mut previous_score = 0;
-        new_scores.insert(sorted[0].0, 0);
-        for (idx, &(row_idx, value)) in sorted.iter().enumerate().skip(1) {
-            if value == sorted[idx - 1].1 {
-                new_scores.insert(row_idx, previous_score);
-            } else {
-                previous_score += 1;
-                new_scores.insert(row_idx, previous_score);
-            }
-        }
-    }
-    (
-        new_scores,
-        sorted.into_iter().map(|(_, v)| v.clone()).collect(),
-    )
+fn gen_order_by<T: Clone + Nullable + PartialOrd>(values: &[T], sort_order: &[usize]) -> Vec<T> {
+    let mut buffer = values
+        .iter()
+        .enumerate()
+        .map(|(idx, v)| (sort_order[idx], v))
+        .collect::<Vec<(usize, &T)>>();
+    buffer.sort_by(|&(left_order, _), &(right_order, _)| {
+        left_order.cmp(&right_order)
+    });
+    buffer.into_iter().map(|(_, value)| value.clone()).collect()
 }
 
 fn gen_group_by<T: Clone>(values: &[T], group_offsets: &[usize]) -> Vec<Vec<T>> {
@@ -297,195 +249,6 @@ fn gen_group_by<T: Clone>(values: &[T], group_offsets: &[usize]) -> Vec<Vec<T>> 
         }
     }
     outer
-}
-
-#[derive(Clone, Debug)]
-enum ListBlock {
-    Bool(Vec<Vec<bool>>),
-    Int(Vec<Vec<i64>>),
-    Float(Vec<Vec<f64>>),
-    String(Vec<Vec<String>>),
-}
-
-impl ListBlock {
-    fn average(&self) -> Result<Box<Block>> {
-        match *self {
-            ListBlock::Bool(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
-                Aggregator::Average,
-                Type::Bool,
-            ))),
-            ListBlock::Int(ref values) => Ok(box FloatBlock::new(
-                values
-                    .iter()
-                    .map(|vs| vs.iter().sum::<i64>() as f64 / vs.len() as f64)
-                    .collect(),
-            )),
-            ListBlock::Float(ref values) => Ok(box FloatBlock::new(
-                values
-                    .iter()
-                    .map(|vs| vs.iter().sum::<f64>() as f64 / vs.len() as f64)
-                    .collect(),
-            )),
-            ListBlock::String(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
-                Aggregator::Average,
-                Type::String,
-            ))),
-        }
-    }
-
-    fn count(&self) -> Result<Box<Block>> {
-        match *self {
-            ListBlock::Bool(ref values) => Ok(box IntBlock::new(
-                values.iter().map(|vs| vs.len() as i64).collect(),
-            )),
-            ListBlock::Int(ref values) => Ok(box IntBlock::new(
-                values.iter().map(|vs| vs.len() as i64).collect(),
-            )),
-            ListBlock::Float(ref values) => Ok(box IntBlock::new(
-                values.iter().map(|vs| vs.len() as i64).collect(),
-            )),
-            ListBlock::String(ref values) => Ok(box IntBlock::new(
-                values.iter().map(|vs| vs.len() as i64).collect(),
-            )),
-        }
-    }
-
-    fn sum(&self) -> Result<Box<Block>> {
-        match *self {
-            ListBlock::Bool(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
-                Aggregator::Sum,
-                Type::Bool,
-            ))),
-            ListBlock::Int(ref values) => Ok(box IntBlock::new(
-                values.iter().map(|vs| vs.iter().sum()).collect(),
-            )),
-            ListBlock::Float(ref values) => Ok(box FloatBlock::new(
-                values.iter().map(|vs| vs.iter().sum()).collect(),
-            )),
-            ListBlock::String(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
-                Aggregator::Sum,
-                Type::String,
-            ))),
-        }
-    }
-}
-
-macro_rules! simple_list_aggregate {
-    ($block:expr, $fn:expr) => {{
-        match *$block {
-            ListBlock::Bool(ref values) => Ok(box BoolBlock::new(values
-                .iter()
-                .map(|vs| $fn(vs))
-                .collect::<aggregate::Result<Vec<bool>>>()?)),
-            ListBlock::Int(ref values) => Ok(box IntBlock::new(values
-                .iter()
-                .map(|vs| $fn(vs))
-                .collect::<aggregate::Result<Vec<i64>>>()?)),
-            ListBlock::Float(ref values) => Ok(box FloatBlock::new(values
-                .iter()
-                .map(|vs| $fn(vs))
-                .collect::<aggregate::Result<Vec<f64>>>()?)),
-            ListBlock::String(ref values) => Ok(box StringBlock::new(values
-                .iter()
-                .map(|vs| $fn(vs))
-                .collect::<aggregate::Result<Vec<String>>>()?)),
-        }
-    }};
-}
-
-impl Block for ListBlock {
-    fn type_(&self) -> Type {
-        match *self {
-            ListBlock::Bool(_) => Type::List(box Type::Bool),
-            ListBlock::Int(_) => Type::List(box Type::Int),
-            ListBlock::Float(_) => Type::List(box Type::Float),
-            ListBlock::String(_) => Type::List(box Type::String),
-        }
-    }
-
-    fn len(&self) -> usize {
-        match *self {
-            ListBlock::Bool(ref values) => values.len(),
-            ListBlock::Int(ref values) => values.len(),
-            ListBlock::Float(ref values) => values.len(),
-            ListBlock::String(ref values) => values.len(),
-        }
-    }
-
-    fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
-        match *self {
-            ListBlock::Bool(ref values) => values[left] == values[right],
-            ListBlock::Int(ref values) => values[left] == values[right],
-            ListBlock::Float(ref values) => values[left] == values[right],
-            ListBlock::String(ref values) => values[left] == values[right],
-        }
-    }
-
-    fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
-        match *self {
-            ListBlock::Bool(ref values) => box ListBlock::Bool(gen_select_by_idx(values, indices)),
-            ListBlock::Int(ref values) => box ListBlock::Int(gen_select_by_idx(values, indices)),
-            ListBlock::Float(ref values) => {
-                box ListBlock::Float(gen_select_by_idx(values, indices))
-            }
-            ListBlock::String(ref values) => {
-                box ListBlock::String(gen_select_by_idx(values, indices))
-            }
-        }
-    }
-
-    fn get(&self, idx: usize) -> Value {
-        match *self {
-            ListBlock::Bool(ref values) => Value::from(values[idx].clone()),
-            ListBlock::Int(ref values) => Value::from(values[idx].clone()),
-            ListBlock::Float(ref values) => Value::from(values[idx].clone()),
-            ListBlock::String(ref values) => Value::from(values[idx].clone()),
-        }
-    }
-
-    fn filter(&self, _predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
-        unimplemented!()
-    }
-
-    fn order_by(
-        &self,
-        _sort_scores: &Option<fnv::FnvHashMap<usize, usize>>,
-        _only_use_scores: bool,
-    ) -> (SortScores, Box<Block>) {
-        unimplemented!()
-    }
-
-    fn group_by(&self, _group_offsets: &[usize]) -> Box<Block> {
-        unimplemented!()
-    }
-
-    fn aggregate(&self, aggregator: &Aggregator) -> Result<Box<Block>> {
-        match *aggregator {
-            Aggregator::Average => self.average(),
-            Aggregator::Count => self.count(),
-            Aggregator::First => simple_list_aggregate!(self, Aggregator::first),
-            Aggregator::Max => simple_list_aggregate!(self, Aggregator::max),
-            Aggregator::Min => simple_list_aggregate!(self, Aggregator::min),
-            Aggregator::Sum => self.sum(),
-        }
-    }
-
-    fn union(&mut self, _other: &mut Block) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
-        unimplemented!()
-    }
-
-    fn into_any_block(&self) -> AnyBlock {
-        match *self {
-            ListBlock::Bool(ref values) => AnyBlock::BoolList(values.clone()),
-            ListBlock::Int(ref values) => AnyBlock::IntList(values.clone()),
-            ListBlock::Float(ref values) => AnyBlock::FloatList(values.clone()),
-            ListBlock::String(ref values) => AnyBlock::StringList(values.clone()),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -508,8 +271,8 @@ impl Block for BoolBlock {
         self.values.len()
     }
 
-    fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
-        self.values[left] == self.values[right]
+    fn cmp_at_indices(&self, left: usize, right: usize) -> cmp::Ordering {
+        self.values[left].cmp(&self.values[right])
     }
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
@@ -532,13 +295,8 @@ impl Block for BoolBlock {
         }
     }
 
-    fn order_by(
-        &self,
-        sort_scores: &Option<fnv::FnvHashMap<usize, usize>>,
-        only_use_scores: bool,
-    ) -> (SortScores, Box<Block>) {
-        let (indices, ordered) = gen_order_by(&self.values, sort_scores, only_use_scores);
-        (indices, box BoolBlock::new(ordered))
+    fn order_by(&self, sort_order: &[usize]) -> Box<Block> {
+        box BoolBlock::new(gen_order_by(&self.values, sort_order))
     }
 
     fn group_by(&self, group_offsets: &[usize]) -> Box<Block> {
@@ -620,8 +378,8 @@ impl Block for IntBlock {
         self.values.len()
     }
 
-    fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
-        self.values[left] == self.values[right]
+    fn cmp_at_indices(&self, left: usize, right: usize) -> cmp::Ordering {
+        self.values[left].cmp(&self.values[right])
     }
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
@@ -644,13 +402,8 @@ impl Block for IntBlock {
         }
     }
 
-    fn order_by(
-        &self,
-        sort_scores: &Option<fnv::FnvHashMap<usize, usize>>,
-        only_use_scores: bool,
-    ) -> (SortScores, Box<Block>) {
-        let (indices, ordered) = gen_order_by(&self.values, sort_scores, only_use_scores);
-        (indices, box IntBlock::new(ordered))
+    fn order_by(&self, sort_order: &[usize]) -> Box<Block> {
+        box IntBlock::new(gen_order_by(&self.values, sort_order))
     }
 
     fn group_by(&self, group_offsets: &[usize]) -> Box<Block> {
@@ -755,8 +508,8 @@ impl Block for FloatBlock {
         self.values.len()
     }
 
-    fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
-        (self.values[left] - self.values[right]).abs() < f64::EPSILON
+    fn cmp_at_indices(&self, left: usize, right: usize) -> cmp::Ordering {
+        nullable_partial_cmp(&self.values[left], &self.values[right])
     }
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
@@ -780,13 +533,8 @@ impl Block for FloatBlock {
         }
     }
 
-    fn order_by(
-        &self,
-        sort_scores: &Option<fnv::FnvHashMap<usize, usize>>,
-        only_use_scores: bool,
-    ) -> (SortScores, Box<Block>) {
-        let (indices, ordered) = gen_order_by(&self.values, sort_scores, only_use_scores);
-        (indices, box FloatBlock::new(ordered))
+    fn order_by(&self, sort_order: &[usize]) -> Box<Block> {
+        box FloatBlock::new(gen_order_by(&self.values, sort_order))
     }
 
     fn group_by(&self, group_offsets: &[usize]) -> Box<Block> {
@@ -925,8 +673,8 @@ impl Block for StringBlock {
         self.indices.len()
     }
 
-    fn equal_at_idxs(&self, left: usize, right: usize) -> bool {
-        self.get_primitive(&left) == self.get_primitive(&right)
+    fn cmp_at_indices(&self, left: usize, right: usize) -> cmp::Ordering {
+        self.get_primitive(&left).cmp(&self.get_primitive(&right))
     }
 
     fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
@@ -960,14 +708,9 @@ impl Block for StringBlock {
         }
     }
 
-    fn order_by(
-        &self,
-        sort_scores: &Option<fnv::FnvHashMap<usize, usize>>,
-        only_use_scores: bool,
-    ) -> (SortScores, Box<Block>) {
+    fn order_by(&self, sort_order: &[usize]) -> Box<Block> {
         let values = &self.iter().collect::<Vec<&str>>();
-        let (indices, ordered) = gen_order_by(values, sort_scores, only_use_scores);
-        (indices, box StringBlock::from_slices(ordered))
+        box StringBlock::from_slices(gen_order_by(values, sort_order))
     }
 
     fn group_by(&self, group_offsets: &[usize]) -> Box<Block> {
@@ -1101,6 +844,186 @@ impl<'a> Iterator for StringBlockIter<'a> {
             self.idx += 1
         }
         result
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ListBlock {
+    Bool(Vec<Vec<bool>>),
+    Int(Vec<Vec<i64>>),
+    Float(Vec<Vec<f64>>),
+    String(Vec<Vec<String>>),
+}
+
+impl ListBlock {
+    fn average(&self) -> Result<Box<Block>> {
+        match *self {
+            ListBlock::Bool(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
+                Aggregator::Average,
+                Type::Bool,
+            ))),
+            ListBlock::Int(ref values) => Ok(box FloatBlock::new(
+                values
+                    .iter()
+                    .map(|vs| vs.iter().sum::<i64>() as f64 / vs.len() as f64)
+                    .collect(),
+            )),
+            ListBlock::Float(ref values) => Ok(box FloatBlock::new(
+                values
+                    .iter()
+                    .map(|vs| vs.iter().sum::<f64>() as f64 / vs.len() as f64)
+                    .collect(),
+            )),
+            ListBlock::String(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
+                Aggregator::Average,
+                Type::String,
+            ))),
+        }
+    }
+
+    fn count(&self) -> Result<Box<Block>> {
+        match *self {
+            ListBlock::Bool(ref values) => Ok(box IntBlock::new(
+                values.iter().map(|vs| vs.len() as i64).collect(),
+            )),
+            ListBlock::Int(ref values) => Ok(box IntBlock::new(
+                values.iter().map(|vs| vs.len() as i64).collect(),
+            )),
+            ListBlock::Float(ref values) => Ok(box IntBlock::new(
+                values.iter().map(|vs| vs.len() as i64).collect(),
+            )),
+            ListBlock::String(ref values) => Ok(box IntBlock::new(
+                values.iter().map(|vs| vs.len() as i64).collect(),
+            )),
+        }
+    }
+
+    fn sum(&self) -> Result<Box<Block>> {
+        match *self {
+            ListBlock::Bool(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
+                Aggregator::Sum,
+                Type::Bool,
+            ))),
+            ListBlock::Int(ref values) => Ok(box IntBlock::new(
+                values.iter().map(|vs| vs.iter().sum()).collect(),
+            )),
+            ListBlock::Float(ref values) => Ok(box FloatBlock::new(
+                values.iter().map(|vs| vs.iter().sum()).collect(),
+            )),
+            ListBlock::String(_) => Err(Error::from(aggregate::Error::AggregatorAndColumnType(
+                Aggregator::Sum,
+                Type::String,
+            ))),
+        }
+    }
+}
+
+macro_rules! simple_list_aggregate {
+    ($block:expr, $fn:expr) => {{
+        match *$block {
+            ListBlock::Bool(ref values) => Ok(box BoolBlock::new(values
+                .iter()
+                .map(|vs| $fn(vs))
+                .collect::<aggregate::Result<Vec<bool>>>()?)),
+            ListBlock::Int(ref values) => Ok(box IntBlock::new(values
+                .iter()
+                .map(|vs| $fn(vs))
+                .collect::<aggregate::Result<Vec<i64>>>()?)),
+            ListBlock::Float(ref values) => Ok(box FloatBlock::new(values
+                .iter()
+                .map(|vs| $fn(vs))
+                .collect::<aggregate::Result<Vec<f64>>>()?)),
+            ListBlock::String(ref values) => Ok(box StringBlock::new(values
+                .iter()
+                .map(|vs| $fn(vs))
+                .collect::<aggregate::Result<Vec<String>>>()?)),
+        }
+    }};
+}
+
+impl Block for ListBlock {
+    fn type_(&self) -> Type {
+        match *self {
+            ListBlock::Bool(_) => Type::List(box Type::Bool),
+            ListBlock::Int(_) => Type::List(box Type::Int),
+            ListBlock::Float(_) => Type::List(box Type::Float),
+            ListBlock::String(_) => Type::List(box Type::String),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match *self {
+            ListBlock::Bool(ref values) => values.len(),
+            ListBlock::Int(ref values) => values.len(),
+            ListBlock::Float(ref values) => values.len(),
+            ListBlock::String(ref values) => values.len(),
+        }
+    }
+
+    fn cmp_at_indices(&self, _left: usize, _right: usize) -> cmp::Ordering {
+        unimplemented!()
+    }
+
+    fn select_by_idx(&self, indices: &[usize]) -> Box<Block> {
+        match *self {
+            ListBlock::Bool(ref values) => box ListBlock::Bool(gen_select_by_idx(values, indices)),
+            ListBlock::Int(ref values) => box ListBlock::Int(gen_select_by_idx(values, indices)),
+            ListBlock::Float(ref values) => {
+                box ListBlock::Float(gen_select_by_idx(values, indices))
+            }
+            ListBlock::String(ref values) => {
+                box ListBlock::String(gen_select_by_idx(values, indices))
+            }
+        }
+    }
+
+    fn get(&self, idx: usize) -> Value {
+        match *self {
+            ListBlock::Bool(ref values) => Value::from(values[idx].clone()),
+            ListBlock::Int(ref values) => Value::from(values[idx].clone()),
+            ListBlock::Float(ref values) => Value::from(values[idx].clone()),
+            ListBlock::String(ref values) => Value::from(values[idx].clone()),
+        }
+    }
+
+    fn filter(&self, _predicate: &Predicate) -> Result<(Vec<usize>, Box<Block>)> {
+        unimplemented!()
+    }
+
+    fn order_by(&self, _sort_order: &[usize]) -> Box<Block> {
+        unimplemented!()
+    }
+
+    fn group_by(&self, _group_offsets: &[usize]) -> Box<Block> {
+        unimplemented!()
+    }
+
+    fn aggregate(&self, aggregator: &Aggregator) -> Result<Box<Block>> {
+        match *aggregator {
+            Aggregator::Average => self.average(),
+            Aggregator::Count => self.count(),
+            Aggregator::First => simple_list_aggregate!(self, Aggregator::first),
+            Aggregator::Max => simple_list_aggregate!(self, Aggregator::max),
+            Aggregator::Min => simple_list_aggregate!(self, Aggregator::min),
+            Aggregator::Sum => self.sum(),
+        }
+    }
+
+    fn union(&mut self, _other: &mut Block) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
+        unimplemented!()
+    }
+
+    fn into_any_block(&self) -> AnyBlock {
+        match *self {
+            ListBlock::Bool(ref values) => AnyBlock::BoolList(values.clone()),
+            ListBlock::Int(ref values) => AnyBlock::IntList(values.clone()),
+            ListBlock::Float(ref values) => AnyBlock::FloatList(values.clone()),
+            ListBlock::String(ref values) => AnyBlock::StringList(values.clone()),
+        }
     }
 }
 

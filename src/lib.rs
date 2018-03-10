@@ -5,7 +5,6 @@ extern crate csv;
 extern crate decorum;
 #[macro_use]
 extern crate downcast_rs;
-extern crate fnv;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate hyper;

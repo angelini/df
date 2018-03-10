@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
@@ -11,7 +12,7 @@ use futures::future::{self, Future};
 use futures_cpupool::CpuPool;
 
 use aggregate::{self, Aggregator};
-use block::{self, AnyBlock, ArithmeticOp, Block, SortScores};
+use block::{self, AnyBlock, ArithmeticOp, Block};
 use pool::{self, Entry, Pool, PoolRef};
 use reader::{self, Format};
 use schema::{Column, Schema};
@@ -197,10 +198,11 @@ fn as_strs(strings: &[String]) -> Vec<&str> {
 fn order_by_future(
     idx: u64,
     block: Arc<Block>,
-    sort_scores: Arc<Option<SortScores>>,
+    sort_order: Arc<Vec<usize>>,
 ) -> Box<Future<Item = (u64, Box<Block>), Error = ()> + Send> {
+    assert_eq!(block.len(), sort_order.len());
     Box::new(future::lazy(move || {
-        future::ok((idx, block.order_by(sort_scores.as_ref(), true).1))
+        future::ok((idx, block.order_by(sort_order.as_ref())))
     }))
 }
 
@@ -302,6 +304,9 @@ impl DataFrame {
     }
 
     pub fn order_by(&self, column_names: &[&str]) -> Result<DataFrame> {
+        if column_names.is_empty() {
+            return Err(Error::OrderByWithNoSortColumns);
+        }
         if self.ordered_by == column_names {
             return Ok(self.clone());
         }
@@ -545,7 +550,7 @@ impl DataFrame {
                             operation.hash_from_seed(idx, col_name),
                             entry.block,
                             pass_indices_arc.clone(),
-                            entry.sorted
+                            entry.sorted,
                         )));
                     }
                 }
@@ -557,41 +562,48 @@ impl DataFrame {
                     .unwrap();
             }
             Operation::OrderBy(ref col_names) => {
-                let mut sort_scores: Option<SortScores> = None;
+                let mut len = 0;
+                let mut sort_columns = vec![];
                 for col_name in col_names {
-                    let col_idx = parent.get_idx(col_name)?;
-                    let entry = pool.get_entry(&col_idx)?;
-                    let (sort_indices, block) = entry.block.order_by(&sort_scores, false);
-                    pool.set_block(
-                        operation.hash_from_seed(&col_idx, col_name),
-                        Arc::from(block),
-                        sort_scores.is_none(),
-                    );
-                    sort_scores = Some(sort_indices);
+                    let parent_idx = parent.get_idx(col_name)?;
+                    let parent_entry = pool.get_entry(&parent_idx)?;
+                    len = parent_entry.block.len();
+                    sort_columns.push(parent_entry.block);
+                }
+
+                let mut ordered_indices = (0..len).into_iter().collect::<Vec<usize>>();
+                ordered_indices.sort_by(|&left_idx, &right_idx| {
+                    for block in &sort_columns {
+                        match block.cmp_at_indices(left_idx, right_idx) {
+                            cmp::Ordering::Equal => (),
+                            cmp::Ordering::Greater => return cmp::Ordering::Greater,
+                            cmp::Ordering::Less => return cmp::Ordering::Less,
+                        };
+                    }
+                    cmp::Ordering::Equal
+                });
+                let mut sort_order = vec![0usize; len];
+                for (sort_idx, row_idx) in ordered_indices.into_iter().enumerate() {
+                    sort_order[row_idx] = sort_idx
                 }
 
                 let cpu_pool = CpuPool::new_num_cpus();
+                let sort_order_arc = Arc::new(sort_order);
                 let mut futures = vec![];
-                match sort_scores {
-                    Some(sort_scores) => {
-                        let sort_scores_arc = Arc::new(Some(sort_scores));
-                        let missing: HashSet<&String> = &HashSet::from_iter(self.schema.keys()) -
-                            &HashSet::from_iter(col_names);
-                        for col_name in missing {
-                            let idx = parent.get_idx(col_name)?;
-                            let entry = pool.get_entry(&idx)?;
-                            futures.push(cpu_pool.spawn(order_by_future(
-                                operation.hash_from_seed(&idx, col_name),
-                                entry.block,
-                                sort_scores_arc.clone(),
-                            )));
-                        }
-                    }
-                    None => return Err(Error::OrderByWithNoSortColumns),
+                for column in self.schema.iter() {
+                    let idx = parent.get_idx(&column.name)?;
+                    let entry = pool.get_entry(&idx)?;
+                    futures.push(cpu_pool.spawn(order_by_future(
+                        operation.hash_from_seed(&idx, &column.name),
+                        entry.block,
+                        sort_order_arc.clone(),
+                    )));
                 }
                 future::join_all(futures)
-                    .map(|blocks| for (idx, block) in blocks {
-                        pool.set_block(idx, Arc::from(block), false)
+                    .map(|blocks| for (idx, (pool_idx, block)) in
+                        blocks.into_iter().enumerate()
+                    {
+                        pool.set_block(pool_idx, Arc::from(block), idx == 0)
                     })
                     .wait()
                     .unwrap();
@@ -610,7 +622,9 @@ impl DataFrame {
                 for row_idx in 0..(len - 1) {
                     let next_is_different = group_columns
                         .iter()
-                        .map(|block| block.equal_at_idxs(row_idx, row_idx + 1))
+                        .map(|block| {
+                            block.cmp_at_indices(row_idx, row_idx + 1) == cmp::Ordering::Equal
+                        })
                         .any(|is_equal| !is_equal);
                     if next_is_different {
                         group_offsets.push(row_idx);
