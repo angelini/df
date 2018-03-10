@@ -101,16 +101,16 @@ class Aggregator(enum.Enum):
 
 class ArithmeticOp(enum.Enum):
     ADD = 1
-    SUBTRACT = 2
-    MULTIPLY = 3
-    DIVIDE = 4
+    SUB = 2
+    MUL = 3
+    DIV = 4
 
     def serialize(self):
         to_s = {
             ArithmeticOp.ADD: 'Add',
-            ArithmeticOp.SUBTRACT: 'Subtract',
-            ArithmeticOp.MULTIPLY: 'Multiply',
-            ArithmeticOp.DIVIDE: 'Divide',
+            ArithmeticOp.SUB: 'Subtract',
+            ArithmeticOp.MUL: 'Multiply',
+            ArithmeticOp.DIV: 'Divide',
         }
         return to_s[self]
 
@@ -283,9 +283,9 @@ def example_line_items(full=False):
                  'line_status',
                  ('sum_qty', 'quantity'),
                  ('sum_base_price', 'extended_price'),
-                 ('sum_disc_price', (ArithmeticOp.MULTIPLY, 'extended_price', (ArithmeticOp.SUBTRACT, Value(1.0), 'discount'))),
-                 ('sum_charge', (ArithmeticOp.MULTIPLY, 'extended_price',
-                                 (ArithmeticOp.MULTIPLY, (ArithmeticOp.SUBTRACT, Value(1.0), 'discount'), (ArithmeticOp.ADD, Value(1.0), 'tax')))),
+                 ('sum_disc_price', (ArithmeticOp.MUL, 'extended_price', (ArithmeticOp.SUB, Value(1.0), 'discount'))),
+                 ('sum_charge', (ArithmeticOp.MUL, 'extended_price',
+                                 (ArithmeticOp.MUL, (ArithmeticOp.SUB, Value(1.0), 'discount'), (ArithmeticOp.ADD, Value(1.0), 'tax')))),
                  ('avg_qty', 'quantity'),
                  ('avg_price', 'extended_price'),
                  ('avg_disc', 'discount'),

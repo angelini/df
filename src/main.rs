@@ -38,7 +38,7 @@ fn example() -> Result<(), df::Error> {
 
     let line_items = DataFrame::read(&Format::Csv, &Path::new("./data/line_items.csv"), &schema);
     let total_key = line_items
-        .select(&[col!("order_key")])?
+        .select(&[col!(("order_key"))])?
         .aggregate(&agg!("order_key", Aggregator::Sum))?;
     println!(
         "total_key.collect(&mut pool): {:?}",

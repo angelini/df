@@ -66,8 +66,29 @@ fn test_select() {
         ["bool", Type::Bool, vec![true, false, true]],
         ["int", Type::Int, vec![1, 2, 3]]
     );
-    let output = df.select(&[col!("int")]);
+    let output = df.select(&[col!(("int"))]);
     assert_df_eq!(&pool, check(output), (1), (2), (3));
+}
+
+#[test]
+fn test_select_combine_with_constants() {
+    let pool = Pool::new_ref();
+    let df = from_vecs!(
+        &pool,
+        ["bool", Type::Bool, vec![true, false, true]],
+        ["int", Type::Int, vec![1, 2, 3]]
+    );
+    let output = df.select(&[col!((+ ("int") {1}) AS "add_1")]);
+    assert_df_eq!(&pool, check(output), (2), (3), (4));
+
+    let output = df.select(&[col!((- ("int") {1}) AS "sub_1")]);
+    assert_df_eq!(&pool, check(output), (0), (1), (2));
+
+    let output = df.select(&[col!((* ("int") {2}) AS "mul_2")]);
+    assert_df_eq!(&pool, check(output), (2), (4), (6));
+
+    let output = df.select(&[col!((/ ("int") {2}) AS "div_2")]);
+    assert_df_eq!(&pool, check(output), (0.5), (1.0), (1.5));
 }
 
 #[test]
@@ -102,7 +123,7 @@ fn test_filter_select() {
         ["bool", Type::Bool, vec![true, false, true]],
         ["int", Type::Int, vec![1, 2, 3]]
     );
-    let output = || df.filter("int", &predicate!(== 2))?.select(&[col!("bool")]);
+    let output = || df.filter("int", &predicate!(== 2))?.select(&[col!(("bool"))]);
     assert_df_eq!(&pool, check(output()), (false));
 }
 

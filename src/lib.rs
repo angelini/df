@@ -32,33 +32,33 @@ pub mod value;
 
 #[macro_export]
 macro_rules! col {
-    ( $source:expr ) => {
-        $crate::dataframe::ColumnExpr::Source($source.to_string())
-    };
-    (constant $value:expr ) => {
+    ( {$value:expr} ) => {
         $crate::dataframe::ColumnExpr::Constant($crate::value::Value::from($value))
     };
-    (alias $alias:expr, $source:expr ) => {
-        $crate::dataframe::ColumnExpr::Alias($alias.to_string(), Box::new($source))
+    ( ($source:expr) ) => {
+        $crate::dataframe::ColumnExpr::Source($source.to_string())
     };
-    (+ $left:expr, $right:expr) => {
+    ( $source:tt AS $alias:expr ) => {
+        $crate::dataframe::ColumnExpr::Alias($alias.to_string(), Box::new(col!($source)))
+    };
+    ( (+ $left:tt $right:tt) ) => {
         $crate::dataframe::ColumnExpr::Operation(
-            $crate::block::ArithmeticOp::Add, Box::new($left), Box::new($right)
+            $crate::block::ArithmeticOp::Add, Box::new(col!($left)), Box::new(col!($right))
         )
     };
-    (- $left:expr, $right:expr) => {
+    ( (- $left:tt $right:tt) ) => {
         $crate::dataframe::ColumnExpr::Operation(
-            $crate::block::ArithmeticOp::Subtract, Box::new($left), Box::new($right)
+            $crate::block::ArithmeticOp::Subtract, Box::new(col!($left)), Box::new(col!($right))
         )
     };
-    (* $left:expr, $right:expr) => {
+    ( (* $left:tt $right:tt) ) => {
         $crate::dataframe::ColumnExpr::Operation(
-            $crate::block::ArithmeticOp::Multiply, Box::new($left), Box::new($right)
+            $crate::block::ArithmeticOp::Multiply, Box::new(col!($left)), Box::new(col!($right))
         )
     };
-    (/ $left:expr, $right:expr) => {
+    ( (/ $left:tt $right:tt) ) => {
         $crate::dataframe::ColumnExpr::Operation(
-            $crate::block::ArithmeticOp::Divide, Box::new($left), Box::new($right)
+            $crate::block::ArithmeticOp::Divide, Box::new(col!($left)), Box::new(col!($right))
         )
     };
 }

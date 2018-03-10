@@ -152,15 +152,20 @@ impl ColumnExpr {
         }
     }
 
-    fn source_names(column_exprs: &[ColumnExpr]) -> Vec<String> {
+    fn source_names(column_exprs: &[&ColumnExpr]) -> Vec<String> {
         column_exprs
             .into_iter()
-            .map(|expr| match *expr {
-                ColumnExpr::Source(ref col_name) => Some(col_name),
-                _ => None,
+            .flat_map(|expr| match **expr {
+                ColumnExpr::Source(ref col_name) => vec![col_name.to_string()],
+                ColumnExpr::Alias(_, ref child) => ColumnExpr::source_names(&[child]),
+                ColumnExpr::Operation(_, ref left, ref right) => {
+                    let mut left_names = ColumnExpr::source_names(&[left]);
+                    let mut right_names = ColumnExpr::source_names(&[right]);
+                    left_names.append(&mut right_names);
+                    left_names
+                }
+                _ => vec![],
             })
-            .filter(|name| name.is_some())
-            .map(|name| name.unwrap().clone())
             .collect()
     }
 }
@@ -520,7 +525,9 @@ impl DataFrame {
                     .into_iter()
                     .map(|expr| (expr.name().unwrap(), expr))
                     .collect::<HashMap<String, &ColumnExpr>>();
-                let len = match ColumnExpr::source_names(column_exprs).first() {
+                let len = match ColumnExpr::source_names(
+                    &column_exprs.iter().collect::<Vec<&ColumnExpr>>(),
+                ).first() {
                     Some(col_name) => pool.get_entry(&parent.get_idx(col_name)?)?.block.len(),
                     None => 1,
                 };
