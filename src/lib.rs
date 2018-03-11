@@ -66,7 +66,7 @@ macro_rules! col {
 #[macro_export]
 macro_rules! agg {
     ( $( $c:expr, $a:expr ),* ) => {{
-        let mut aggregators = std::collections::BTreeMap::new();
+        let mut aggregators = std::collections::HashMap::new();
         $(
             aggregators.insert($c.to_string(), $a);
         )*

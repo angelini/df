@@ -1,5 +1,5 @@
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -119,21 +119,6 @@ impl ColumnExpr {
         }
     }
 
-    fn source_name(&self) -> Option<String> {
-        match *self {
-            ColumnExpr::Constant(_) => None,
-            ColumnExpr::Source(ref name) => Some(name.clone()),
-            ColumnExpr::Alias(_, ref child_expr) => child_expr.source_name(),
-            ColumnExpr::Operation(_, ref left, ref right) => {
-                let mut source = left.source_name();
-                if source.is_none() {
-                    source = right.source_name()
-                }
-                source
-            }
-        }
-    }
-
     fn type_(&self, parent_schema: &Schema) -> Result<Type> {
         match *self {
             ColumnExpr::Constant(ref value) => Ok(value.type_()),
@@ -170,28 +155,66 @@ impl ColumnExpr {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Hash, Serialize)]
+#[derive(Debug, Hash)]
+enum OperationType {
+    Read,
+    Select,
+    Filter,
+    OrderBy,
+    GroupBy,
+    Aggregation,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Operation {
     Read(Format, PathBuf),
     Select(Vec<ColumnExpr>),
     Filter(String, Predicate),
     OrderBy(Vec<String>),
     GroupBy(Vec<String>),
-    Aggregation(BTreeMap<String, Aggregator>),
+    Aggregation(HashMap<String, Aggregator>),
 }
 
 impl Operation {
-    fn hash_from_seed(&self, seed: &u64, col_name: &str) -> u64 {
+    fn hash_from_seeds(&self, seeds: &[u64], col_name: &str) -> u64 {
         let mut hasher = DefaultHasher::new();
-        seed.hash(&mut hasher);
-        if let Operation::Select(ref column_exprs) = *self {
-            let named = column_exprs
-                .into_iter()
-                .map(|expr| (expr.name().unwrap(), expr))
-                .collect::<HashMap<String, &ColumnExpr>>();
-            named[col_name].hash(&mut hasher);
+        for seed in seeds {
+            seed.hash(&mut hasher);
         }
-        self.hash(&mut hasher);
+        match *self {
+            Operation::Read(ref format, ref path) => {
+                OperationType::Read.hash(&mut hasher);
+                format.hash(&mut hasher);
+                path.hash(&mut hasher);
+            }
+            Operation::Select(ref column_exprs) => {
+                OperationType::Select.hash(&mut hasher);
+                let named = column_exprs
+                    .into_iter()
+                    .map(|expr| (expr.name().unwrap(), expr))
+                    .collect::<HashMap<String, &ColumnExpr>>();
+                named[col_name].hash(&mut hasher);
+            }
+            Operation::Filter(ref filter_col_name, ref predicate) => {
+                OperationType::Filter.hash(&mut hasher);
+                filter_col_name.hash(&mut hasher);
+                predicate.hash(&mut hasher);
+            }
+            Operation::OrderBy(ref col_names) => {
+                OperationType::OrderBy.hash(&mut hasher);
+                col_names.hash(&mut hasher);
+            }
+            Operation::GroupBy(ref col_names) => {
+                OperationType::GroupBy.hash(&mut hasher);
+                col_names.hash(&mut hasher);
+            }
+            Operation::Aggregation(ref aggregators) => {
+                OperationType::Aggregation.hash(&mut hasher);
+                if let Some(aggregator) = aggregators.get(col_name) {
+                    aggregator.hash(&mut hasher)
+                }
+            }
+        }
         hasher.finish()
     }
 }
@@ -266,13 +289,20 @@ impl DataFrame {
         let pool_indices = column_exprs
             .iter()
             .map(|expr| if let Some(col_name) = expr.name() {
-                let source_col = expr.source_name().ok_or_else(
-                    || Error::WithoutSource(col_name.clone()),
-                )?;
-                let parent_idx = self.pool_indices.get(&source_col).ok_or_else(|| {
-                    Error::MissingColumnInIndices(col_name.clone())
-                })?;
-                let idx = operation.hash_from_seed(parent_idx, &col_name);
+                let sources = ColumnExpr::source_names(&[expr]);
+                if sources.is_empty() {
+                    return Err(Error::WithoutSource(col_name.clone()));
+                }
+                let parent_indices: Vec<u64> = sources
+                    .into_iter()
+                    .map(|source_col_name| {
+                        self.pool_indices
+                            .get(&source_col_name)
+                            .cloned()
+                            .ok_or_else(|| Error::MissingColumnInIndices(source_col_name.clone()))
+                    })
+                    .collect::<Result<Vec<u64>>>()?;
+                let idx = operation.hash_from_seeds(&parent_indices, &col_name);
                 Ok((col_name, idx))
             } else {
                 Err(Error::AliasRequired)
@@ -364,7 +394,7 @@ impl DataFrame {
         })
     }
 
-    pub fn aggregate(&self, aggregators: &BTreeMap<String, Aggregator>) -> Result<DataFrame> {
+    pub fn aggregate(&self, aggregators: &HashMap<String, Aggregator>) -> Result<DataFrame> {
         {
             let aggregate_keys: HashSet<&String> = HashSet::from_iter(aggregators.keys());
             let group_keys = HashSet::from_iter(&self.grouped_by);
@@ -542,7 +572,7 @@ impl DataFrame {
                 let filter_entry = pool.get_entry(&filter_col_idx)?;
                 let (pass_indices, filtered_block) = filter_entry.block.filter(predicate)?;
                 pool.set_block(
-                    operation.hash_from_seed(&filter_col_idx, filter_col_name),
+                    operation.hash_from_seeds(&[filter_col_idx], filter_col_name),
                     Arc::from(filtered_block),
                     filter_entry.sorted,
                 );
@@ -554,7 +584,7 @@ impl DataFrame {
                     if col_name != filter_col_name {
                         let entry = pool.get_entry(idx)?;
                         futures.push(cpu_pool.spawn(filter_future(
-                            operation.hash_from_seed(idx, col_name),
+                            operation.hash_from_seeds(&[*idx], col_name),
                             entry.block,
                             pass_indices_arc.clone(),
                             entry.sorted,
@@ -601,7 +631,7 @@ impl DataFrame {
                     let idx = parent.get_idx(&column.name)?;
                     let entry = pool.get_entry(&idx)?;
                     futures.push(cpu_pool.spawn(order_by_future(
-                        operation.hash_from_seed(&idx, &column.name),
+                        operation.hash_from_seeds(&[idx], &column.name),
                         entry.block,
                         sort_order_arc.clone(),
                     )));
@@ -660,7 +690,7 @@ impl DataFrame {
             }
             Operation::Aggregation(ref aggregators) => {
                 for (col_name, idx) in &parent.pool_indices {
-                    let new_idx = operation.hash_from_seed(idx, col_name);
+                    let new_idx = operation.hash_from_seeds(&[*idx], col_name);
                     let entry = pool.get_entry(idx)?;
                     if aggregators.contains_key(col_name) {
                         let aggregator = &aggregators[col_name];
@@ -728,7 +758,10 @@ impl DataFrame {
         indices
             .iter()
             .map(|(col_name, idx)| {
-                (col_name.clone(), operation.hash_from_seed(idx, col_name))
+                (
+                    col_name.clone(),
+                    operation.hash_from_seeds(&[*idx], col_name),
+                )
             })
             .collect()
     }
