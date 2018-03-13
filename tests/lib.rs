@@ -123,7 +123,11 @@ fn test_filter_select() {
         ["bool", Type::Bool, vec![true, false, true]],
         ["int", Type::Int, vec![1, 2, 3]]
     );
-    let output = || df.filter("int", &predicate!(== 2))?.select(&[col!(("bool"))]);
+    let output = || {
+        df.filter("int", &predicate!(== 2))?.select(
+            &[col!(("bool"))],
+        )
+    };
     assert_df_eq!(&pool, check(output()), (false));
 }
 
@@ -336,6 +340,31 @@ fn test_agg_multiple_columns() {
         Aggregator::Max
     ));
     assert_df_eq!(&pool, check(output), (16, 1, 5));
+}
+
+#[test]
+fn test_join() {
+    let pool = Pool::new_ref();
+    let left_df = from_vecs!(
+        &pool,
+        ["l_int", Type::Int, vec![3, 2, 1, 1]],
+        ["l_str", Type::String, vec!["d", "c", "b", "a"]]
+    );
+    let right_df = from_vecs!(
+        &pool,
+        ["r_int", Type::Int, vec![3, 2, 2, 1, 1]],
+        ["r_str", Type::String, vec!["i", "h", "g", "f", "e"]]
+    );
+    let output = left_df.join(&right_df, "l_int", "r_int");
+    assert_df_eq!(&pool, check(output),
+                  (1, "b", 1, "f"),
+                  (1, "b", 1, "e"),
+                  (1, "a", 1, "f"),
+                  (1, "a", 1, "e"),
+                  (2, "c", 2, "h"),
+                  (2, "c", 2, "g"),
+                  (3, "d", 3, "i")
+    );
 }
 
 #[test]

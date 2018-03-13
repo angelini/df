@@ -176,6 +176,7 @@ pub trait Block: fmt::Debug + Downcast + Send + Sync {
     fn group_by(&self, &[usize]) -> Box<Block>;
     fn aggregate(&self, &Aggregator) -> Result<Box<Block>>;
 
+    fn repeat_keys(&self, &Block) -> Result<(Vec<usize>, Vec<usize>)>;
     fn combine(&self, &Block, &ArithmeticOp) -> Result<Box<Block>>;
     fn union(&mut self, &mut Block) -> Result<()>;
 
@@ -224,7 +225,7 @@ fn nullable_partial_cmp<T: Nullable + PartialOrd>(left: &T, right: &T) -> cmp::O
     )
 }
 
-fn gen_order_by<T: Clone + Nullable + PartialOrd>(values: &[T], sort_order: &[usize]) -> Vec<T> {
+fn gen_order_by<T: Clone>(values: &[T], sort_order: &[usize]) -> Vec<T> {
     let mut buffer = values
         .iter()
         .enumerate()
@@ -249,6 +250,43 @@ fn gen_group_by<T: Clone>(values: &[T], group_offsets: &[usize]) -> Vec<Vec<T>> 
         }
     }
     outer
+}
+
+fn gen_repeat_keys<T: Nullable + PartialOrd>(left: &[T], right: &[T]) -> (Vec<usize>, Vec<usize>) {
+    let mut left_idx = 0;
+    let mut right_idx = 0;
+    let mut left_repeats = vec![];
+    let mut right_repeats = vec![];
+
+    let mut hold_idx = None;
+
+    while left_idx < left.len() && right_idx < right.len() {
+        match nullable_partial_cmp(&left[left_idx], &right[right_idx]) {
+            cmp::Ordering::Equal => {
+                left_repeats.push(left_idx);
+                right_repeats.push(right_idx);
+                if hold_idx.is_none() {
+                    hold_idx = Some(right_idx);
+                }
+                right_idx += 1;
+            }
+            cmp::Ordering::Greater => {
+                hold_idx = None;
+                right_idx += 1;
+            }
+            cmp::Ordering::Less => {
+                if hold_idx.is_some() {
+                    if left_idx < left.len() - 1 && nullable_partial_cmp(&left[left_idx], &left[left_idx + 1]) == cmp::Ordering::Equal {
+                        right_idx = hold_idx.unwrap();
+                    } else {
+                        hold_idx = None;
+                    }
+                }
+                left_idx += 1;
+            }
+        }
+    }
+    (left_repeats, right_repeats)
 }
 
 #[derive(Clone, Debug)]
@@ -320,17 +358,24 @@ impl Block for BoolBlock {
         }
     }
 
-    fn union(&mut self, other: &mut Block) -> Result<()> {
-        let other_type = other.type_();
-        let downcasted = other.downcast_mut::<BoolBlock>().ok_or_else(|| {
-            Error::Downcast(Type::Int, other_type)
+    fn repeat_keys(&self, other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+        let downcasted = other.downcast_ref::<BoolBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), other.type_())
         })?;
-        self.values.append(&mut downcasted.values);
-        Ok(())
+        Ok(gen_repeat_keys(&self.values, &downcasted.values))
     }
 
     fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
         unimplemented!()
+    }
+
+    fn union(&mut self, other: &mut Block) -> Result<()> {
+        let other_type = other.type_();
+        let downcasted = other.downcast_mut::<BoolBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), other_type)
+        })?;
+        self.values.append(&mut downcasted.values);
+        Ok(())
     }
 
     fn into_any_block(&self) -> AnyBlock {
@@ -424,13 +469,11 @@ impl Block for IntBlock {
         }
     }
 
-    fn union(&mut self, other: &mut Block) -> Result<()> {
-        let other_type = other.type_();
-        let downcasted = other.downcast_mut::<IntBlock>().ok_or_else(|| {
-            Error::Downcast(Type::Int, other_type)
+    fn repeat_keys(&self, other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+        let downcasted = other.downcast_ref::<IntBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), other.type_())
         })?;
-        self.values.append(&mut downcasted.values);
-        Ok(())
+        Ok(gen_repeat_keys(&self.values, &downcasted.values))
     }
 
     fn combine(&self, other: &Block, operation: &ArithmeticOp) -> Result<Box<Block>> {
@@ -461,6 +504,15 @@ impl Block for IntBlock {
                     .collect(),
             ))
         }
+    }
+
+    fn union(&mut self, other: &mut Block) -> Result<()> {
+        let other_type = other.type_();
+        let downcasted = other.downcast_mut::<IntBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), other_type)
+        })?;
+        self.values.append(&mut downcasted.values);
+        Ok(())
     }
 
     fn into_any_block(&self) -> AnyBlock {
@@ -555,13 +607,11 @@ impl Block for FloatBlock {
         }
     }
 
-    fn union(&mut self, other: &mut Block) -> Result<()> {
-        let other_type = other.type_();
-        let downcasted = other.downcast_mut::<FloatBlock>().ok_or_else(|| {
-            Error::Downcast(Type::Int, other_type)
+    fn repeat_keys(&self, other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+        let downcasted = other.downcast_ref::<FloatBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), other.type_())
         })?;
-        self.values.append(&mut downcasted.values);
-        Ok(())
+        Ok(gen_repeat_keys(&self.values, &downcasted.values))
     }
 
     fn combine(&self, other: &Block, operation: &ArithmeticOp) -> Result<Box<Block>> {
@@ -584,6 +634,15 @@ impl Block for FloatBlock {
                 })
                 .collect(),
         ))
+    }
+
+    fn union(&mut self, other: &mut Block) -> Result<()> {
+        let other_type = other.type_();
+        let downcasted = other.downcast_mut::<FloatBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), other_type)
+        })?;
+        self.values.append(&mut downcasted.values);
+        Ok(())
     }
 
     fn into_any_block(&self) -> AnyBlock {
@@ -745,10 +804,24 @@ impl Block for StringBlock {
         }
     }
 
+    fn repeat_keys(&self, other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+        let downcasted = other.downcast_ref::<StringBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), other.type_())
+        })?;
+        Ok(gen_repeat_keys(
+            &self.values.iter().map(|s| s.as_str()).collect::<Vec<&str>>(),
+            &downcasted.values.iter().map(|s| s.as_str()).collect::<Vec<&str>>(),
+        ))
+    }
+
+    fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
+        unimplemented!()
+    }
+
     fn union(&mut self, other: &mut Block) -> Result<()> {
         let other_type = other.type_();
         let downcasted = other.downcast_mut::<StringBlock>().ok_or_else(|| {
-            Error::Downcast(Type::Int, other_type)
+            Error::Downcast(self.type_(), other_type)
         })?;
         self.values.append(&mut downcasted.values);
         let mut incremented_indices = downcasted
@@ -760,10 +833,6 @@ impl Block for StringBlock {
             .collect();
         self.indices.append(&mut incremented_indices);
         Ok(())
-    }
-
-    fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
-        unimplemented!()
     }
 
     fn into_any_block(&self) -> AnyBlock {
@@ -1009,11 +1078,15 @@ impl Block for ListBlock {
         }
     }
 
-    fn union(&mut self, _other: &mut Block) -> Result<()> {
+    fn repeat_keys(&self, _other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
         unimplemented!()
     }
 
     fn combine(&self, _other: &Block, _operation: &ArithmeticOp) -> Result<Box<Block>> {
+        unimplemented!()
+    }
+
+    fn union(&mut self, _other: &mut Block) -> Result<()> {
         unimplemented!()
     }
 

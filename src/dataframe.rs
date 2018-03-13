@@ -163,6 +163,7 @@ enum OperationType {
     OrderBy,
     GroupBy,
     Aggregation,
+    Join,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -173,6 +174,7 @@ pub enum Operation {
     OrderBy(Vec<String>),
     GroupBy(Vec<String>),
     Aggregation(HashMap<String, Aggregator>),
+    Join(Box<DataFrame>, String, String),
 }
 
 impl Operation {
@@ -213,6 +215,14 @@ impl Operation {
                 if let Some(aggregator) = aggregators.get(col_name) {
                     aggregator.hash(&mut hasher)
                 }
+            }
+            Operation::Join(ref other, ref self_join_col, ref other_join_col) => {
+                OperationType::Join.hash(&mut hasher);
+                for idx in other.pool_indices.keys() {
+                    idx.hash(&mut hasher)
+                }
+                self_join_col.hash(&mut hasher);
+                other_join_col.hash(&mut hasher);
             }
         }
         hasher.finish()
@@ -435,6 +445,36 @@ impl DataFrame {
         })
     }
 
+    pub fn join(&self, other: &DataFrame, self_join_col: &str, other_join_col: &str) -> Result<DataFrame> {
+        let self_ordered = if self.ordered_by.get(0).map(|s| s.as_str()) == Some(self_join_col) {
+            self.clone()
+        } else {
+            self.order_by(&[self_join_col])?
+        };
+        let other_ordered = if other.ordered_by.get(0).map(|s| s.as_str()) == Some(other_join_col) {
+            other.clone()
+        } else {
+            other.order_by(&[other_join_col])?
+        };
+        let operation = Operation::Join(
+            box other_ordered.clone(),
+            self_join_col.to_string(),
+            other_join_col.to_string(),
+        );
+        let self_new_indices = Self::new_indices(&operation, &self_ordered.pool_indices);
+        let other_new_indices = Self::new_indices(&operation, &other_ordered.pool_indices);
+        let mut new_indices = self_new_indices.into_iter().collect::<Vec<(String, u64)>>();
+        new_indices.extend(&mut other_new_indices.into_iter());
+        Ok(DataFrame {
+            pool_indices: new_indices.into_iter().collect(),
+            schema: self_ordered.schema.union(&other.schema),
+            parent: Some(box self_ordered.clone()),
+            operation: Some(operation),
+            ordered_by: vec![self_join_col.to_string()],
+            grouped_by: vec![],
+        })
+    }
+
     pub fn call(&self, operation: &Operation) -> Result<DataFrame> {
         Ok(match *operation {
             Operation::Read(_, _) => unimplemented!(),
@@ -445,6 +485,7 @@ impl DataFrame {
             Operation::OrderBy(ref column_names) => self.order_by(&as_strs(column_names))?,
             Operation::GroupBy(ref column_names) => self.group_by(&as_strs(column_names))?,
             Operation::Aggregation(ref aggregators) => self.aggregate(aggregators)?,
+            Operation::Join(_, _, _) => panic!(),
         })
     }
 
@@ -546,8 +587,6 @@ impl DataFrame {
         }
         let id = timer_start!(&format!("materialize - {:?}", operation));
 
-        // FIXME: don't hold the lock for all of materialize
-        let mut pool = pool.lock().unwrap();
 
         match *operation {
             Operation::Select(ref column_exprs) => {
@@ -555,6 +594,7 @@ impl DataFrame {
                     .into_iter()
                     .map(|expr| (expr.name().unwrap(), expr))
                     .collect::<HashMap<String, &ColumnExpr>>();
+                let mut pool = pool.lock().unwrap();
                 let len = match ColumnExpr::source_names(
                     &column_exprs.iter().collect::<Vec<&ColumnExpr>>(),
                 ).first() {
@@ -568,6 +608,7 @@ impl DataFrame {
                 }
             }
             Operation::Filter(ref filter_col_name, ref predicate) => {
+                let mut pool = pool.lock().unwrap();
                 let filter_col_idx = parent.get_idx(filter_col_name)?;
                 let filter_entry = pool.get_entry(&filter_col_idx)?;
                 let (pass_indices, filtered_block) = filter_entry.block.filter(predicate)?;
@@ -599,6 +640,7 @@ impl DataFrame {
                     .unwrap();
             }
             Operation::OrderBy(ref col_names) => {
+                let mut pool = pool.lock().unwrap();
                 let mut len = 0;
                 let mut sort_columns = vec![];
                 for col_name in col_names {
@@ -646,6 +688,7 @@ impl DataFrame {
                     .unwrap();
             }
             Operation::GroupBy(ref col_names) => {
+                let mut pool = pool.lock().unwrap();
                 let mut len = 0;
                 let mut group_columns = vec![];
                 for col_name in col_names {
@@ -689,6 +732,7 @@ impl DataFrame {
                 }
             }
             Operation::Aggregation(ref aggregators) => {
+                let mut pool = pool.lock().unwrap();
                 for (col_name, idx) in &parent.pool_indices {
                     let new_idx = operation.hash_from_seeds(&[*idx], col_name);
                     let entry = pool.get_entry(idx)?;
@@ -704,6 +748,36 @@ impl DataFrame {
                     }
                 }
             }
+            Operation::Join(ref other, ref self_join_col, ref other_join_col) => {
+                if other.should_materialize(pool) {
+                    other.materialize(pool)?
+                }
+                let mut pool = pool.lock().unwrap();
+
+                let parent_block = pool.get_entry(&parent.get_idx(self_join_col)?)?.block;
+                let other_block = pool.get_entry(&other.get_idx(other_join_col)?)?.block;
+                let repeat_keys = parent_block.repeat_keys(other_block.as_ref())?;
+
+                for col_name in self.schema.keys() {
+                    if other.schema.contains(col_name) {
+                        let idx = other.get_idx(col_name)?;
+                        let entry = pool.get_entry(&idx)?;
+                        pool.set_block(
+                            self.get_idx(col_name)?,
+                            Arc::from(entry.block.select_by_idx(&repeat_keys.1)),
+                            col_name == other_join_col
+                        );
+                    } else {
+                        let idx = parent.get_idx(col_name)?;
+                        let entry = pool.get_entry(&idx)?;
+                        pool.set_block(
+                            self.get_idx(col_name)?,
+                            Arc::from(entry.block.select_by_idx(&repeat_keys.0)),
+                            col_name == self_join_col
+                        );
+                    }
+                }
+            },
             _ => unreachable!(),
         }
         timer_stop!(id);

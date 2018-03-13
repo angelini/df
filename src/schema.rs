@@ -36,6 +36,10 @@ impl Schema {
         }
     }
 
+    pub fn contains(&self, col_name: &str) -> bool {
+        self.columns.iter().any(|column| column.name == col_name)
+    }
+
     pub fn keys(&self) -> Vec<&String> {
         self.columns.iter().map(|column| &column.name).collect()
     }
@@ -59,6 +63,14 @@ impl Schema {
                 .filter(|&column| column_names.contains(&column.name.as_str()))
                 .cloned()
                 .collect(),
+        }
+    }
+
+    pub fn union(&self, other: &Schema) -> Schema {
+        let mut all_columns = self.columns.clone();
+        all_columns.extend(other.iter().cloned());
+        Schema {
+            columns: all_columns
         }
     }
 }
