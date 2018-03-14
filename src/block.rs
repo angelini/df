@@ -276,7 +276,10 @@ fn gen_repeat_keys<T: Nullable + PartialOrd>(left: &[T], right: &[T]) -> (Vec<us
             }
             cmp::Ordering::Less => {
                 if hold_idx.is_some() {
-                    if left_idx < left.len() - 1 && nullable_partial_cmp(&left[left_idx], &left[left_idx + 1]) == cmp::Ordering::Equal {
+                    if left_idx < left.len() - 1 &&
+                        nullable_partial_cmp(&left[left_idx], &left[left_idx + 1]) ==
+                            cmp::Ordering::Equal
+                    {
                         right_idx = hold_idx.unwrap();
                     } else {
                         hold_idx = None;
@@ -358,9 +361,9 @@ impl Block for BoolBlock {
         }
     }
 
-    fn repeat_keys(&self, other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
-        let downcasted = other.downcast_ref::<BoolBlock>().ok_or_else(|| {
-            Error::Downcast(self.type_(), other.type_())
+    fn repeat_keys(&self, right: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+        let downcasted = right.downcast_ref::<BoolBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), right.type_())
         })?;
         Ok(gen_repeat_keys(&self.values, &downcasted.values))
     }
@@ -469,9 +472,9 @@ impl Block for IntBlock {
         }
     }
 
-    fn repeat_keys(&self, other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
-        let downcasted = other.downcast_ref::<IntBlock>().ok_or_else(|| {
-            Error::Downcast(self.type_(), other.type_())
+    fn repeat_keys(&self, right: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+        let downcasted = right.downcast_ref::<IntBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), right.type_())
         })?;
         Ok(gen_repeat_keys(&self.values, &downcasted.values))
     }
@@ -607,9 +610,9 @@ impl Block for FloatBlock {
         }
     }
 
-    fn repeat_keys(&self, other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
-        let downcasted = other.downcast_ref::<FloatBlock>().ok_or_else(|| {
-            Error::Downcast(self.type_(), other.type_())
+    fn repeat_keys(&self, right: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+        let downcasted = right.downcast_ref::<FloatBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), right.type_())
         })?;
         Ok(gen_repeat_keys(&self.values, &downcasted.values))
     }
@@ -804,13 +807,20 @@ impl Block for StringBlock {
         }
     }
 
-    fn repeat_keys(&self, other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
-        let downcasted = other.downcast_ref::<StringBlock>().ok_or_else(|| {
-            Error::Downcast(self.type_(), other.type_())
+    fn repeat_keys(&self, right: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+        let downcasted = right.downcast_ref::<StringBlock>().ok_or_else(|| {
+            Error::Downcast(self.type_(), right.type_())
         })?;
         Ok(gen_repeat_keys(
-            &self.values.iter().map(|s| s.as_str()).collect::<Vec<&str>>(),
-            &downcasted.values.iter().map(|s| s.as_str()).collect::<Vec<&str>>(),
+            &self.values
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<&str>>(),
+            &downcasted
+                .values
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<&str>>(),
         ))
     }
 
@@ -1078,7 +1088,7 @@ impl Block for ListBlock {
         }
     }
 
-    fn repeat_keys(&self, _other: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
+    fn repeat_keys(&self, _right: &Block) -> Result<(Vec<usize>, Vec<usize>)> {
         unimplemented!()
     }
 

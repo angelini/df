@@ -1,4 +1,5 @@
 import enum
+import json
 import requests
 
 URI = 'http://127.0.0.1:3000/call'
@@ -206,6 +207,11 @@ class Df:
         serialized = {col: agg.serialize() for (col, agg) in aggregators.items()}
         return Df.call(self.dataframe, {'Op':
                                         {'Aggregation': serialized}})
+
+    def join(self, right, left_col, right_col):
+        return Df.call(self.dataframe, {'Op': {'Join': [right.dataframe,
+                                                        left_col,
+                                                        right_col]}})
 
     def collect(self):
         return Df.call(self.dataframe, {'Action': 'Collect'}).values

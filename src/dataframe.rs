@@ -445,32 +445,32 @@ impl DataFrame {
         })
     }
 
-    pub fn join(&self, other: &DataFrame, self_join_col: &str, other_join_col: &str) -> Result<DataFrame> {
-        let self_ordered = if self.ordered_by.get(0).map(|s| s.as_str()) == Some(self_join_col) {
+    pub fn join(&self, right: &DataFrame, left_col: &str, right_col: &str) -> Result<DataFrame> {
+        let left_ordered = if self.ordered_by.get(0).map(|s| s.as_str()) == Some(left_col) {
             self.clone()
         } else {
-            self.order_by(&[self_join_col])?
+            self.order_by(&[left_col])?
         };
-        let other_ordered = if other.ordered_by.get(0).map(|s| s.as_str()) == Some(other_join_col) {
-            other.clone()
+        let right_ordered = if right.ordered_by.get(0).map(|s| s.as_str()) == Some(right_col) {
+            right.clone()
         } else {
-            other.order_by(&[other_join_col])?
+            right.order_by(&[right_col])?
         };
         let operation = Operation::Join(
-            box other_ordered.clone(),
-            self_join_col.to_string(),
-            other_join_col.to_string(),
+            box right_ordered.clone(),
+            left_col.to_string(),
+            right_col.to_string(),
         );
-        let self_new_indices = Self::new_indices(&operation, &self_ordered.pool_indices);
-        let other_new_indices = Self::new_indices(&operation, &other_ordered.pool_indices);
-        let mut new_indices = self_new_indices.into_iter().collect::<Vec<(String, u64)>>();
-        new_indices.extend(&mut other_new_indices.into_iter());
+        let left_new_indices = Self::new_indices(&operation, &left_ordered.pool_indices);
+        let right_new_indices = Self::new_indices(&operation, &right_ordered.pool_indices);
+        let mut new_indices = left_new_indices.into_iter().collect::<Vec<(String, u64)>>();
+        new_indices.extend(&mut right_new_indices.into_iter());
         Ok(DataFrame {
             pool_indices: new_indices.into_iter().collect(),
-            schema: self_ordered.schema.union(&other.schema),
-            parent: Some(box self_ordered.clone()),
+            schema: left_ordered.schema.union(&right.schema),
+            parent: Some(box left_ordered.clone()),
             operation: Some(operation),
-            ordered_by: vec![self_join_col.to_string()],
+            ordered_by: vec![left_col.to_string()],
             grouped_by: vec![],
         })
     }
@@ -485,7 +485,9 @@ impl DataFrame {
             Operation::OrderBy(ref column_names) => self.order_by(&as_strs(column_names))?,
             Operation::GroupBy(ref column_names) => self.group_by(&as_strs(column_names))?,
             Operation::Aggregation(ref aggregators) => self.aggregate(aggregators)?,
-            Operation::Join(_, _, _) => panic!(),
+            Operation::Join(ref dataframe, ref left_col, ref right_col) => {
+                self.join(dataframe, left_col, right_col)?
+            }
         })
     }
 
@@ -748,24 +750,27 @@ impl DataFrame {
                     }
                 }
             }
-            Operation::Join(ref other, ref self_join_col, ref other_join_col) => {
-                if other.should_materialize(pool) {
-                    other.materialize(pool)?
+            Operation::Join(ref right, ref left_col, ref right_col) => {
+                println!("right: {:?}", right);
+                if right.should_materialize(pool) {
+                    println!("will materialize");
+                    right.materialize(pool)?;
+                    println!("pool: {:?}", pool);
                 }
                 let mut pool = pool.lock().unwrap();
 
-                let parent_block = pool.get_entry(&parent.get_idx(self_join_col)?)?.block;
-                let other_block = pool.get_entry(&other.get_idx(other_join_col)?)?.block;
-                let repeat_keys = parent_block.repeat_keys(other_block.as_ref())?;
+                let left_block = pool.get_entry(&parent.get_idx(left_col)?)?.block;
+                let right_block = pool.get_entry(&right.get_idx(right_col)?)?.block;
+                let repeat_keys = left_block.repeat_keys(right_block.as_ref())?;
 
                 for col_name in self.schema.keys() {
-                    if other.schema.contains(col_name) {
-                        let idx = other.get_idx(col_name)?;
+                    if right.schema.contains(col_name) {
+                        let idx = right.get_idx(col_name)?;
                         let entry = pool.get_entry(&idx)?;
                         pool.set_block(
                             self.get_idx(col_name)?,
                             Arc::from(entry.block.select_by_idx(&repeat_keys.1)),
-                            col_name == other_join_col
+                            col_name == right_col,
                         );
                     } else {
                         let idx = parent.get_idx(col_name)?;
@@ -773,11 +778,11 @@ impl DataFrame {
                         pool.set_block(
                             self.get_idx(col_name)?,
                             Arc::from(entry.block.select_by_idx(&repeat_keys.0)),
-                            col_name == self_join_col
+                            col_name == left_col,
                         );
                     }
                 }
-            },
+            }
             _ => unreachable!(),
         }
         timer_stop!(id);
