@@ -138,25 +138,44 @@ class ColumnExpr:
         self.kind = kind
         self.args = args
 
-    def from_arg(arg):
-        if isinstance(arg, Value):
-            return ColumnExpr(ColumnExprKind.CONSTANT, arg)
-        if isinstance(arg, str):
-            return ColumnExpr(ColumnExprKind.SOURCE, arg)
-        if isinstance(arg, (tuple, list)):
-            if len(arg) == 2:
-                return ColumnExpr(
-                    ColumnExprKind.ALIAS,
-                    arg[0],
-                    ColumnExpr.from_arg(arg[1])
-                )
-            if len(arg) == 3:
-                return ColumnExpr(
-                    ColumnExprKind.OPERATION,
-                    arg[0],
-                    ColumnExpr.from_arg(arg[1]),
-                    ColumnExpr.from_arg(arg[2])
-                )
+    def __add__(self, other):
+        return ColumnExpr(
+            ColumnExprKind.OPERATION,
+            ArithmeticOp.ADD,
+            self,
+            other
+        )
+
+    def __sub__(self, other):
+        return ColumnExpr(
+            ColumnExprKind.OPERATION,
+            ArithmeticOp.SUB,
+            self,
+            other
+        )
+
+    def __mul__(self, other):
+        return ColumnExpr(
+            ColumnExprKind.OPERATION,
+            ArithmeticOp.MUL,
+            self,
+            other
+        )
+
+    def __truediv__(self, other):
+        return ColumnExpr(
+            ColumnExprKind.OPERATION,
+            ArithmeticOp.DIV,
+            self,
+            other
+        )
+
+    def alias(self, name):
+        return ColumnExpr(
+            ColumnExprKind.ALIAS,
+            name,
+            self
+        )
 
     def serialize(self):
         if len(self.args) == 1:
@@ -164,6 +183,12 @@ class ColumnExpr:
             return {self.kind.serialize(): arg.serialize() if not isinstance(arg, str) else arg}
         return {self.kind.serialize(): [arg.serialize() if not isinstance(arg, str) else arg
                                         for arg in self.args]}
+
+
+def c(expr):
+    if isinstance(expr, Value):
+        return ColumnExpr(ColumnExprKind.CONSTANT, expr)
+    return ColumnExpr(ColumnExprKind.SOURCE, expr)
 
 
 class Df:
@@ -186,12 +211,9 @@ class Df:
     def from_csv(path, schema):
         return Df.call(None, {'Read': ['csv', path, schema.serialize()]})
 
-    def select(self, args):
-        column_exprs = [
-            ColumnExpr.from_arg(arg).serialize()
-            for arg in args
-        ]
-        return Df.call(self.dataframe, {'Op': {'Select': column_exprs}})
+    def select(self, column_exprs):
+        serialized = [expr.serialize() for expr in column_exprs]
+        return Df.call(self.dataframe, {'Op': {'Select': serialized}})
 
     def filter(self, column_name, predicate):
         return Df.call(self.dataframe, {'Op': {'Filter': [column_name,
@@ -229,7 +251,7 @@ def example_small():
                      ('bool', Type.BOOL)])
     return Df.from_csv('data/small.csv', schema) \
              .filter('bool', Predicate(Comparator.EQUAL, Value(True))) \
-             .select(['int']) \
+             .select([c('int')]) \
              .aggregate({'int': Aggregator.AVERAGE}) \
              .collect()
 
@@ -285,17 +307,16 @@ def example_line_items(full=False):
     return Df.from_csv(path, schema) \
              .filter('ship_date', Predicate(Comparator.LESS_THAN_OR_EQ, Value('1998-12-01'))) \
              .select([
-                 'return_flag',
-                 'line_status',
-                 ('sum_qty', 'quantity'),
-                 ('sum_base_price', 'extended_price'),
-                 ('sum_disc_price', (ArithmeticOp.MUL, 'extended_price', (ArithmeticOp.SUB, Value(1.0), 'discount'))),
-                 ('sum_charge', (ArithmeticOp.MUL, 'extended_price',
-                                 (ArithmeticOp.MUL, (ArithmeticOp.SUB, Value(1.0), 'discount'), (ArithmeticOp.ADD, Value(1.0), 'tax')))),
-                 ('avg_qty', 'quantity'),
-                 ('avg_price', 'extended_price'),
-                 ('avg_disc', 'discount'),
-                 ('count_order', 'order_key'),
+                 c('return_flag'),
+                 c('line_status'),
+                 c('quantity').alias('sum_qty'),
+                 c('extended_price').alias('sum_base_price'),
+                 ((c(Value(1.0)) - c('discount')) * c('extended_price')).alias('sum_disc_price'),
+                 (((c(Value(1.0)) + c('tax')) * (c(Value(1.0)) - c('discount'))) * c('extended_price')).alias('sum_charge'),
+                 c('quantity').alias('avg_quantity'),
+                 c('extended_price').alias('avg_price'),
+                 c('discount').alias('avg_discount'),
+                 c('order_key').alias('count_order')
              ]) \
              .group_by(['return_flag', 'line_status']) \
              .order_by(['return_flag', 'line_status']) \
@@ -303,41 +324,8 @@ def example_line_items(full=False):
                          'sum_base_price': Aggregator.SUM,
                          'sum_disc_price': Aggregator.SUM,
                          'sum_charge': Aggregator.SUM,
-                         'avg_qty': Aggregator.AVERAGE,
+                         'avg_quantity': Aggregator.AVERAGE,
                          'avg_price': Aggregator.AVERAGE,
-                         'avg_disc': Aggregator.AVERAGE,
+                         'avg_discount': Aggregator.AVERAGE,
                          'count_order': Aggregator.COUNT}) \
              .collect()
-
-
-def bench():
-    schema = Schema([('order_key', Type.INT),
-                     ('part_key', Type.INT),
-                     ('supplier_key', Type.INT),
-                     ('line_number', Type.INT),
-                     ('quantity', Type.FLOAT),
-                     ('extended_price', Type.FLOAT),
-                     ('discount', Type.FLOAT),
-                     ('tax', Type.FLOAT),
-                     ('return_flag', Type.STRING),
-                     ('line_status', Type.STRING),
-                     ('ship_date', Type.STRING),
-                     ('commit_date', Type.STRING),
-                     ('receipt_date', Type.STRING),
-                     ('ship_instructions', Type.STRING),
-                     ('ship_mode', Type.STRING),
-                     ('comment', Type.STRING)])
-    path = 'data/line_items_full.csv'
-    # .filter('ship_instructions', Predicate(Comparator.EQUAL, Value('DELIVER IN PERSON'))) \
-    # .filter('order_key', Predicate(Comparator.EQUAL, Value(1))) \
-    # .filter('ship_mode', Predicate(Comparator.EQUAL, Value('TRUCK'))) \
-    # return Df.from_csv(path, schema) \
-    #     .filter('ship_mode', Predicate(Comparator.EQUAL, Value('TRUCK'))) \
-    #     .select(['quantity']) \
-    #     .aggregate({'quantity': Aggregator.SUM}) \
-    #     .collect()
-    return Df.from_csv(path, schema) \
-        .select(['ship_mode']) \
-        .order_by(['ship_mode']) \
-        .aggregate({'ship_mode': Aggregator.FIRST}) \
-        .collect()

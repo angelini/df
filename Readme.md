@@ -34,7 +34,7 @@ schema = Schema([('int', Type.INT),
 
 df = Df.from_csv('data/small.csv', schema) \
        .filter('bool', Predicate(Comparator.EQUAL, Value(True))) \
-       .select(['int']) \
+       .select([c('int')]) \
        .aggregate({'int': Aggregator.AVERAGE})
 
 df.collect()
