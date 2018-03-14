@@ -218,7 +218,11 @@ fn gen_filter<T: Clone + PartialEq + PartialOrd>(
 fn nullable_partial_cmp<T: Nullable + PartialOrd>(left: &T, right: &T) -> cmp::Ordering {
     left.partial_cmp(right).unwrap_or_else(
         || if left.is_null() {
-            cmp::Ordering::Less
+            if right.is_null() {
+                cmp::Ordering::Equal
+            } else {
+                cmp::Ordering::Less
+            }
         } else {
             cmp::Ordering::Greater
         },
