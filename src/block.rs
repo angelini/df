@@ -235,7 +235,7 @@ fn gen_order_by<T: Clone>(values: &[T], sort_order: &[usize]) -> Vec<T> {
         .enumerate()
         .map(|(idx, v)| (sort_order[idx], v))
         .collect::<Vec<(usize, &T)>>();
-    buffer.sort_by(|&(left_order, _), &(right_order, _)| {
+    buffer.sort_unstable_by(|&(left_order, _), &(right_order, _)| {
         left_order.cmp(&right_order)
     });
     buffer.into_iter().map(|(_, value)| value.clone()).collect()

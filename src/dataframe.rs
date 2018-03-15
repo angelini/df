@@ -653,7 +653,7 @@ impl DataFrame {
                 }
 
                 let mut ordered_indices = (0..len).into_iter().collect::<Vec<usize>>();
-                ordered_indices.sort_by(|&left_idx, &right_idx| {
+                ordered_indices.sort_unstable_by(|&left_idx, &right_idx| {
                     for block in &sort_columns {
                         match block.cmp_at_indices(left_idx, right_idx) {
                             cmp::Ordering::Equal => (),
@@ -751,11 +751,8 @@ impl DataFrame {
                 }
             }
             Operation::Join(ref right, ref left_col, ref right_col) => {
-                println!("right: {:?}", right);
                 if right.should_materialize(pool) {
-                    println!("will materialize");
                     right.materialize(pool)?;
-                    println!("pool: {:?}", pool);
                 }
                 let mut pool = pool.lock().unwrap();
 
