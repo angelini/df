@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use futures::future::{self, Future};
 use futures_cpupool::CpuPool;
+use smallvec::SmallVec;
 
 use aggregate::{self, Aggregator};
 use block::{self, AnyBlock, ArithmeticOp, Block};
@@ -652,22 +653,48 @@ impl DataFrame {
                     sort_columns.push(parent_entry.block);
                 }
 
-                let mut ordered_indices = (0..len).into_iter().collect::<Vec<usize>>();
-                ordered_indices.sort_unstable_by(|&left_idx, &right_idx| {
-                    for block in &sort_columns {
-                        match block.cmp_at_indices(left_idx, right_idx) {
-                            cmp::Ordering::Equal => (),
-                            cmp::Ordering::Greater => return cmp::Ordering::Greater,
-                            cmp::Ordering::Less => return cmp::Ordering::Less,
-                        };
-                    }
-                    cmp::Ordering::Equal
+                let mut id = timer_start!("ordered_indices");
+                // let block = &sort_columns[0];
+                // let mut ordered_indices = (0..len).into_iter().collect::<Vec<usize>>();
+                // let mut ordered_indices = sort_columns.iter().flat_mat_map(|block| block.get(idx)).collect::<Vec<Value>>();
+                let mut row_indices = (0..len).into_iter().collect::<Vec<usize>>();
+                let values = row_indices.iter().flat_map(|idx| sort_columns.iter().map(move |block| block.get(*idx))).collect::<Vec<Value>>();
+                timer_stop!(id);
+                id = timer_start!("sort ordered_indices");
+
+                let sort_cols_len = sort_columns.len();
+                row_indices.sort_by(|left_idx, right_idx| {
+                    let left_start = left_idx * sort_cols_len;
+                    let right_start = right_idx * sort_cols_len;
+                    let left = &values[left_start..(left_start + sort_cols_len)];
+                    let right = &values[right_start..(right_start + sort_cols_len)];
+                    left.cmp(right)
+                    // for col_idx in 0..sort_cols_len {
+                    //     let c = values[left_idx * sort_cols_len + col_idx].cmp(&values[right_idx * sort_cols_len + col_idx]);
+                    //     if c != cmp::Ordering::Equal {
+                    //         return c
+                    //     }
+                    // }
+                    // cmp::Ordering::Equal
+                    // for (l, r) in left.iter().zip(right) {
+                    //     let c = l.cmp(r);
+                    //     if c != cmp::Ordering::Equal {
+                    //         return c
+                    //     }
+                    // }
+                    // cmp::Ordering::Equal
+                    // left.cmp(right)
+                    // for block in &sort_columns {
+                    // block.cmp_at_indices(*left_idx, *right_idx)
                 });
+                timer_stop!(id);
+                id = timer_start!("sort_order");
                 let mut sort_order = vec![0usize; len];
-                for (sort_idx, row_idx) in ordered_indices.into_iter().enumerate() {
+                for (sort_idx, row_idx) in row_indices.into_iter().enumerate() {
                     sort_order[row_idx] = sort_idx
                 }
-
+                timer_stop!(id);
+                id = timer_start!("futures");
                 let cpu_pool = CpuPool::new_num_cpus();
                 let sort_order_arc = Arc::new(sort_order);
                 let mut futures = vec![];
@@ -688,6 +715,7 @@ impl DataFrame {
                     })
                     .wait()
                     .unwrap();
+                timer_stop!(id)
             }
             Operation::GroupBy(ref col_names) => {
                 let mut pool = pool.lock().unwrap();

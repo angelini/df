@@ -89,7 +89,7 @@ pub enum Type {
     List(Box<Type>),
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Value {
     Bool(bool),
     Int(i64),

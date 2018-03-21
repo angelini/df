@@ -72,7 +72,7 @@ trait Reader {
     fn read(&self) -> Result<HashMap<String, Box<Block>>>;
 }
 
-const FILE_CHUNK_SIZE: u64 = 10_000_000;
+const FILE_CHUNK_SIZE: u64 = 1_000_000;
 
 type BlockMap = HashMap<String, Box<Block>>;
 
@@ -141,7 +141,7 @@ fn read_section(
     file.read_exact(&mut contents)?;
     let mut csv_reader = csv::ReaderBuilder::new()
         .has_headers(false)
-        .delimiter(b'|')
+        .delimiter(b',')
         .from_reader(contents.as_slice());
 
     let types = schema.iter().map(|c| &c.type_).collect::<Vec<&Type>>();
@@ -149,6 +149,8 @@ fn read_section(
     for record in csv_reader.records() {
         let record = record?;
         for (idx, column) in schema.iter().enumerate() {
+            // println!("column: {:?}", column);
+            // println!("record.get(idx).unwrap(): {:?}", record.get(idx).unwrap());
             builders[idx].push(Value::parse(
                 &column.type_,
                 record.get(idx).unwrap(),
